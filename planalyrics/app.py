@@ -30,6 +30,12 @@ LOOKUP_NOTICE_MS = 300
 # a backward step this large is a real seek; anything smaller is the player
 # repeating a stale Position value and must not drag playback back
 SEEK_BACKWARD_TOLERANCE_US = 1_500_000
+# The player announces the new song and the new position in separate reports, so
+# for a moment after a track change the position still belongs to the song being
+# left. A report this close to where that song had got to, this soon after the
+# change, is that leftover rather than the new song's own position.
+NEW_TRACK_GRACE_S = 3.0
+STALE_POSITION_US = 3_000_000
 WAITING = "等待 MyUne Music…"
 
 
@@ -54,6 +60,10 @@ class App:
         self.anchor_time = time.monotonic()
         self.generation = 0
         self._notice_timer = 0
+        # where the song being left had reached, and until when a report near it
+        # is disbelieved (see _on_track_changed)
+        self._left_at = 0
+        self._left_at_until = 0.0
 
         # the overlay's menu lists the players, so it is built after the hub
         self.overlay = Overlay(self.config, self)
@@ -181,8 +191,22 @@ class App:
             return
         self.track = track
         self.lyrics = None
+        # Clear the panel rather than leaving the previous song's lyric standing.
+        # That text is from the middle of another song and nothing on screen says
+        # so, which reads as the new song having opened part-way through. Blank
+        # is honest for the moment it takes to find the new one, and for anything
+        # slower than a blink the notice below says what is happening.
+        self.overlay.set_status("")
         self.playing = self.players.status == "Playing"
-        self._reanchor(self.players.position_us(), clamp=False)   # a new track: trust it
+        # A new song starts at its beginning. The position the player can be
+        # asked for right now is still the one it last reported for the song we
+        # are leaving -- it announces the new song and its position separately --
+        # so taking it opened the new song's lyrics part-way through, wherever
+        # the old one had got to. Remember where that was, so the reports that
+        # follow can be told apart from the new song's own.
+        self._left_at = self._estimate_us()
+        self._left_at_until = time.monotonic() + NEW_TRACK_GRACE_S
+        self._reanchor(0, clamp=False)
         self._start_lookup(track)
 
     def _on_seeked(self, _client, position_us: int) -> None:
@@ -299,6 +323,13 @@ class App:
         and is adopted as-is; seeks also arrive on their own signal.
         """
         if position_us is None:
+            position_us = self.anchor_us
+        if time.monotonic() < self._left_at_until and (
+            abs(position_us - self._left_at) <= STALE_POSITION_US
+        ):
+            # the song we just left, reported again: the player has not caught up
+            # with the change yet, so keep what we have rather than jumping to
+            # wherever the old song had reached
             position_us = self.anchor_us
         if clamp:
             estimate = self._estimate_us()
