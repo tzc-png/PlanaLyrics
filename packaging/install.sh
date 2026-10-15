@@ -57,7 +57,9 @@ if [[ $copied -eq 0 ]]; then
 fi
 
 mkdir -p "$apps"
-sed "s|@EXEC@|$launcher|" "$here/planalyrics.desktop.in" > "$entry"
+# global: the desktop file names the launcher more than once -- the entry itself
+# and each of its actions
+sed "s|@EXEC@|$launcher|g" "$here/planalyrics.desktop.in" > "$entry"
 refresh
 
 echo "installed:"
@@ -66,3 +68,6 @@ echo "  $icons/<size>x<size>/apps/planalyrics.png  ($copied sizes)"
 echo
 echo "PlanaLyrics should now appear in the application grid; if it does not,"
 echo "log out and back in, or run 'gtk-launch planalyrics'."
+echo
+echo "An already-running instance keeps the icon menu it read at startup: to pick"
+echo "up a new one, restart the shell (Alt+F2, type r, Enter) or log back in."
