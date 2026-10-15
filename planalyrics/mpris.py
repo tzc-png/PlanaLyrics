@@ -52,9 +52,9 @@ class Track:
     def same_song(self, other: "Track | None") -> bool:
         """Whether this is the same song, ignoring the player's ids and length.
 
-        MyUne Music reissues ``mpris:trackid`` for the same file and
-        periodically re-emits Metadata with ``mpris:length`` momentarily
-        zeroed; neither should trigger a second lyrics lookup.
+        A player may reissue ``mpris:trackid`` for the same file, or re-emit
+        Metadata with ``mpris:length`` momentarily zeroed; neither should trigger
+        a second lyrics lookup.
         """
         if other is None or not self.title or not other.title:
             return False

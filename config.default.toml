@@ -7,8 +7,8 @@
 # 右键菜单里的「恢复默认设置」也用它覆盖当前设置。
 
 [player]
-# 留空 = 自动跟随正在播放的来源：MyUne Music、浏览器（B站等）、LX Music 都支持
-# 想固定某一个就填它的名字，例如 "org.mpris.MediaPlayer2.myune_music" 或 "lxmusic"
+# 留空 = 自动跟随正在播放的来源（音乐播放器、浏览器都支持）
+# 想固定在某个来源上，就填它的名字 —— 右键菜单「播放器」里能看到可用的名字
 pin = ""
 lxmusic_port = 23330       # LX Music 的“开放 API”端口（需在 LX Music 设置里打开）
 poll_ms = 500              # 向播放器查询播放位置的间隔（毫秒），中间会自行插值

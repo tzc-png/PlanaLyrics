@@ -37,7 +37,9 @@ SEEK_BACKWARD_TOLERANCE_US = 1_500_000
 # change, is that leftover rather than the new song's own position.
 NEW_TRACK_GRACE_S = 3.0
 STALE_POSITION_US = 3_000_000
-WAITING = "等待 MyUne Music…"
+# shown while no player is connected: named for none of them in particular, since
+# the lyrics follow whatever is playing
+WAITING = "等待播放器…"
 # The menu's 增大/减小 moves font_scale by this many percent a press. The step is
 # on the scale, not the pixels, so the larger lyric font and the smaller
 # translation font each move in proportion to their own size, and an integer step
@@ -427,8 +429,8 @@ class App:
     def _reanchor(self, position_us: int | None, clamp: bool = True) -> None:
         """Adopt the player's reported position, ignoring small backward steps.
 
-        MyUne Music repeats the same Position value for two polls in a row about
-        once a second, so taking it verbatim drags playback back ~500 ms. Landing
+        A player may report the same Position value for two polls in a row, so
+        taking it verbatim drags playback back by up to a poll interval. Landing
         that across a line boundary is what makes the lyrics flick forward and
         then jump back to the previous line. A large backward jump is a real seek
         and is adopted as-is; seeks also arrive on their own signal.

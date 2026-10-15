@@ -1,6 +1,6 @@
 """Which playback source the lyrics follow.
 
-MyUne Music and browsers announce themselves on the session bus as MPRIS
+Music players and browsers announce themselves on the session bus as MPRIS
 players; LX Music does not, but serves its own HTTP API. The hub discovers
 whatever is available, follows whichever source is playing, and lets the user
 pin one by hand from the overlay's menu.

@@ -1,8 +1,8 @@
 """Find the audio file behind the currently playing track.
 
-MyUne Music does not publish ``xesam:url``, so the path has to be recovered:
-first from the player's open file descriptors (authoritative and instant), then
-from a directory index matched on tags and duration.
+Not every player publishes ``xesam:url``, so the path has to be recovered: first
+from the player's open file descriptors (authoritative and instant), then from a
+directory index matched on tags and duration.
 """
 
 from __future__ import annotations
