@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=PlanaLyrics
+Name[zh_CN]=PlanaLyrics 歌词
+GenericName=Desktop lyrics overlay
+GenericName[zh_CN]=桌面歌词
+Comment=Lyrics overlay that follows MyUne Music, browsers and LX Music
+Comment[zh_CN]=跟随 MyUne Music / 浏览器 / LX Music 的桌面歌词覆盖层
+Exec=@EXEC@
+Icon=planalyrics
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=lyrics;lrc;歌词;桌面歌词;
+StartupNotify=false
+StartupWMClass=planalyrics
