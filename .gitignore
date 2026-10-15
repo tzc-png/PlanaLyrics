@@ -4,7 +4,3 @@ __pycache__/
 
 # Claude Code local settings (machine-specific permission allowlist)
 .claude/settings.local.json
-
-# Third-party reference checkout: 34 MB of someone else's source (BetterLyrics),
-# kept only as a design reference. Re-downloadable, so not versioned here.
-ref/BetterLyrics-dev/
