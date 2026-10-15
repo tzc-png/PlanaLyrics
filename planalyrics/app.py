@@ -80,19 +80,37 @@ class App:
         return 0
 
     def quit(self) -> None:
-        config_mod.save_state(self.config, panel=self.overlay.panel_size())
         Gtk.main_quit()
 
-    def on_window_moved(self, x: int, y: int) -> None:
-        self.config.window.x = x
-        self.config.window.y = y
-        config_mod.save_state(self.config, panel=self.overlay.panel_size())
+    def save_window_size(self) -> None:
+        """Make the window's current size the one it opens at from now on.
 
-    def on_panel_resized(self, width: int, height: int) -> None:
-        config_mod.save_state(self.config, panel=(width, height))
+        Dragging is provisional, so this is how a size becomes permanent. The text
+        scales with the panel, so the panel's dimensions are only half of what has
+        to be written: the font sizes are part of the same reference, and leaving
+        them alone would shrink the text the moment this panel became the one
+        everything is measured against.
+        """
+        width, height = self.overlay.panel_size()
+        scale = self.overlay.font_scale()
+        window = self.config.window
+        scaled = {
+            "font_lyrics": max(6, round(window.font_lyrics * scale)),
+            "font_translation": max(6, round(window.font_translation * scale)),
+            "karaoke_lift": max(0, round(window.karaoke_lift * scale)),
+        }
+        config_mod.save_values(
+            {"window": {"panel_width": width, "panel_height": height, **scaled}}
+        )
+        window.panel_width, window.panel_height = width, height
+        for key, value in scaled.items():
+            setattr(window, key, value)
+        # the panel on screen is the size being saved, so take it as the reference
+        self.overlay.apply_config(self.config, force_panel=True)
+        print(f"PlanaLyrics: 已保存窗口大小 {width}×{height}")
 
     def open_config_folder(self) -> None:
-        """Show config.toml (the defaults) and state.json (what the app remembers)."""
+        """Open the folder holding config.toml, where every setting lives."""
         try:
             Gio.AppInfo.launch_default_for_uri(config_mod.CONFIG_DIR.as_uri(), None)
         except GLib.Error as exc:
@@ -122,31 +140,42 @@ class App:
         """
         config_mod.save_values({section: {key: value}})
 
-    def restore_defaults(self) -> None:
-        """Put the shipped defaults back, in the file and on screen."""
-        if not config_mod.restore_defaults():
-            return
-        self.reload_config(notify=False)
-        print("PlanaLyrics: 已恢复默认设置")
-
     # -- config ----------------------------------------------------------
 
     def _on_config_file_changed(self) -> None:
         GLib.timeout_add(300, self._reload_config_idle)
 
     def _reload_config_idle(self) -> bool:
-        self.reload_config(notify=False)
+        # the file was saved by hand: apply it, but leave a window shape that is
+        # only being tried out alone unless the size itself was what changed
+        self._adopt_config(config_mod.load(), move_window=False, force_panel=False)
         return False
 
     def reload_config(self, notify: bool = True) -> None:
-        self.config = config_mod.load()
-        self.overlay.apply_config(self.config)
+        """Apply the settings file again, the window's size included.
+
+        The window's place is not part of this: it was dragged to, and where it
+        opens is settled once, at startup, from x and y. Restoring the defaults
+        is the one that puts the place back as well.
+        """
+        self._adopt_config(config_mod.load(), move_window=False, force_panel=True)
+        if notify:
+            print("PlanaLyrics: 配置已重载")
+
+    def restore_defaults(self) -> None:
+        """Put the shipped defaults back: every setting, and the window with it."""
+        if not config_mod.restore_defaults():
+            return
+        self._adopt_config(config_mod.load(), move_window=True, force_panel=True)
+        print("PlanaLyrics: 已恢复默认设置")
+
+    def _adopt_config(self, config: Config, move_window: bool, force_panel: bool) -> None:
+        self.config = config
+        self.overlay.apply_config(config, move_window=move_window, force_panel=force_panel)
         self.overlay.force_redraw()
         # the lyrics settings decide which sources apply, so they take effect the
         # same way the rest of the file does
         self.reload_lyrics()
-        if notify:
-            print("PlanaLyrics: 配置已重载")
 
     def research(self) -> None:
         if self.track is not None:

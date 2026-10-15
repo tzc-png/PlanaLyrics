@@ -107,6 +107,9 @@ class _Block:
     height: float
     size: int
     translation_size: int
+    # what the line will really be drawn at, which is not what laying it out at
+    # this size reports -- see _drawn_height
+    primary_height: float = 0.0
     top: float = 0.0
 
 
@@ -293,14 +296,28 @@ class Overlay:
     def panel_size(self) -> tuple[int, int]:
         return self._panel
 
-    def apply_config(self, config: Config) -> None:
+    def apply_config(self, config: Config, move_window: bool = False,
+                     force_panel: bool = False) -> None:
+        """Adopt a settings file.
+
+        ``force_panel`` takes the file's panel size even when it has not changed,
+        which is what "reload config" means: the size on screen may have been
+        dragged away from what the file says. ``move_window`` puts the window
+        back where the file says it belongs, and only "restore defaults" does
+        that -- where the window opens is settled at startup, and dragging it
+        around is this session's business.
+        """
+        declared = (int(config.window.panel_width), int(config.window.panel_height))
+        if force_panel or declared != (int(self.config.window.panel_width),
+                                       int(self.config.window.panel_height)):
+            self._panel = declared
         self.config = config
-        self._panel = (int(config.window.panel_width), int(config.window.panel_height))
         self._text_cache.clear()
         self._blur_key = None             # colours and blur size may have changed
         self.window.set_type_hint(HINTS.get(config.window.type_hint, Gdk.WindowTypeHint.UTILITY))
         self.window.set_keep_above(True)
-        self.window.move(config.window.x, config.window.y)
+        if move_window:
+            self.window.move(config.window.x, config.window.y)
         self._build_menu()
         self._apply_panel_size()
         self._sample_background()
@@ -588,12 +605,13 @@ class Overlay:
             return False
         if self._resize is not None:
             self._resize = None
-            self.app.on_panel_resized(*self._panel)
             self._sample_background()
             return True
         if self._drag is not None:
-            if self._dragged:
-                self.app.on_window_moved(*self.window.get_position())
+            # where the window was dragged to is this session's business only:
+            # nothing is written, so the next run opens it where the settings
+            # file says. "Save current window size" in the menu is what makes a
+            # size stick.
             self._drag = None
             return True
         return False
@@ -640,6 +658,7 @@ class Overlay:
         heading("显示")
         toggle("逐字进度（唱到哪亮到哪）", "window", "karaoke")
         toggle("跟随壁纸明暗", "window", "adapt_to_background")
+        action("保存当前窗口大小", self.app.save_window_size)
 
         menu.append(Gtk.SeparatorMenuItem())
         heading("程序")
@@ -737,6 +756,24 @@ class Overlay:
         layout.set_wrap(Pango.WrapMode.WORD_CHAR)
         return layout
 
+    def _drawn_height(self, text: str, size: float, full_size: int) -> float:
+        """The height this row will actually be drawn at.
+
+        A row is rasterised once at the size it has as the current line and then
+        blitted scaled, so its height is that rasterisation's times the scale --
+        which is not what laying the same text out at the smaller size reports.
+        A smaller font fits more on a wrapped row, so a line that needs two rows
+        at full size can be measured as one row at ``context_scale``; believing
+        that measurement is what let a wrapped line's second row land on top of
+        its own translation.
+        """
+        if full_size <= 0:
+            return 0.0
+        surface, _width, height, _pad, _lines = self._text_surface(text, full_size)
+        if surface is None:
+            return 0.0
+        return height * (size / full_size)
+
     def _has_translation(self) -> bool:
         settings = self.config.window
         if not settings.show_translation or self.lyrics is None:
@@ -761,9 +798,9 @@ class Overlay:
         inner = settings.inner_spacing
 
         def block_height(size: int, translation_size: int) -> float:
-            height = self._layout("国", size).get_pixel_size()[1]
+            height = self._drawn_height("国", size, full_primary)
             if self._has_translation():
-                height += inner + self._layout("国", translation_size).get_pixel_size()[1]
+                height += inner + self._drawn_height("国", translation_size, full_translation)
             return height
 
         full_primary = self._font(settings.font_lyrics)
@@ -787,12 +824,18 @@ class Overlay:
             if self._has_translation() and lines[i].translation:
                 translation = self._layout(lines[i].translation, translation_size)
             primary = self._layout(lines[i].text, size)
-            height = primary.get_pixel_size()[1]
+            primary_height = self._drawn_height(lines[i].text, size, full_primary)
+            height = primary_height
             if translation is not None:
-                height += inner + translation.get_pixel_size()[1]
+                height += inner + self._drawn_height(
+                    lines[i].translation, translation_size, full_translation
+                )
             reserved = current_reserved if current else other_reserved
             blocks.append(
-                _Block(i, primary, translation, max(height, reserved), size, translation_size)
+                _Block(
+                    i, primary, translation, max(height, reserved), size, translation_size,
+                    primary_height,
+                )
             )
 
         pitch = other_reserved + settings.line_spacing
@@ -845,7 +888,7 @@ class Overlay:
                         lines[block.index].translation,
                         TRANSLATION,
                         block.translation_size,
-                        block.top + block.primary.get_pixel_size()[1] + settings.inner_spacing,
+                        block.top + block.primary_height + settings.inner_spacing,
                         alpha,
                         attention=current,
                         sharp=1.0 if current else 0.0,

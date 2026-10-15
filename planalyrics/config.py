@@ -1,15 +1,15 @@
-"""Configuration and persisted window state.
+"""The settings file, and the defaults it is seeded from.
 
-config.default.toml, shipped beside the source, holds the defaults: it seeds
-~/.config/PlanaLyrics/config.toml on first run, and the menu's "restore defaults"
-copies it back over whatever is there.
+config.default.toml, shipped beside the source, holds the defaults. It is only
+ever read: it seeds ~/.config/PlanaLyrics/config.toml on first run, and the
+menu's "restore defaults" copies it back over whatever is there. Nothing the app
+does writes to it.
 
-config.toml stays hand-editable. The app writes to it too -- a setting changed
-from the right-click menu has to survive a restart -- but it is edited a line at
-a time rather than regenerated, so the comments explaining every setting stay
-where they are. What the app remembers about the window itself (where it was
-dragged to, how big it was dragged) lives in state.json instead: that is
-position, not a setting.
+config.toml is the only file the app writes, and it stays hand-editable. The app
+edits it a line at a time rather than regenerating it, so the comments
+explaining every setting stay where they are. Dragging the window around is not
+a setting and is not written anywhere: every run opens the window the way this
+file says.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from gi.repository import Gio
 
 CONFIG_DIR = Path.home() / ".config" / "PlanaLyrics"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
-STATE_PATH = CONFIG_DIR / "state.json"
 CACHE_DIR = Path.home() / ".cache" / "PlanaLyrics"
 DEFAULTS_PATH = Path(__file__).resolve().parent.parent / "config.default.toml"
 
@@ -109,12 +108,16 @@ class Config:
     player: PlayerConfig = field(default_factory=PlayerConfig)
     window: WindowConfig = field(default_factory=WindowConfig)
     lyrics: LyricsConfig = field(default_factory=LyricsConfig)
-    # what config.toml itself declares for the panel size, before any remembered
-    # size is applied -- needed to tell "default edited" from "user dragged"
-    declared_panel: tuple[int, int] = (0, 0)
 
 
-def load(path: Path = CONFIG_PATH, state_path: Path = STATE_PATH) -> Config:
+def load(path: Path = CONFIG_PATH) -> Config:
+    """Read the settings file, seeding it from the defaults if it is not there.
+
+    Only config.toml is read. Where the window was dragged to and how big it was
+    dragged are this session's business: they are not written anywhere, so every
+    run opens the window the way the settings file describes. Dragging is for
+    trying a shape out; "save current window size" in the menu is what keeps one.
+    """
     if not path.exists():
         seed(path)
     try:
@@ -127,20 +130,6 @@ def load(path: Path = CONFIG_PATH, state_path: Path = STATE_PATH) -> Config:
     _apply(config.player, data.get("player"))
     _apply(config.window, data.get("window"))
     _apply(config.lyrics, data.get("lyrics"))
-    config.declared_panel = (int(config.window.panel_width), int(config.window.panel_height))
-
-    state = load_state(state_path)
-    if state.get("x") is not None:
-        config.window.x = int(state["x"])
-    if state.get("y") is not None:
-        config.window.y = int(state["y"])
-
-    # A dragged panel size is remembered, but editing the default in config.toml
-    # wins over it -- otherwise a changed default would appear to do nothing.
-    saved = state.get("panel")
-    if saved and list(state.get("default_panel") or []) == list(config.declared_panel):
-        config.window.panel_width = int(saved[0])
-        config.window.panel_height = int(saved[1])
     return config
 
 
@@ -207,13 +196,12 @@ def save_values(changes: dict[str, dict[str, object]], path: Path = CONFIG_PATH)
     _self_write = time.monotonic()
 
 
-def restore_defaults(path: Path = CONFIG_PATH, state_path: Path = STATE_PATH) -> bool:
+def restore_defaults(path: Path = CONFIG_PATH) -> bool:
     """Put the shipped defaults back, comments and all.
 
     The settings file is replaced wholesale, so what was there is kept beside it
-    first -- a restore is otherwise one click away from being regretted. What the
-    app remembered about the window goes too, or the restored file would appear
-    not to have applied.
+    first -- a restore is otherwise one click away from being regretted. The
+    defaults file itself is only ever read; nothing the app does writes to it.
     """
     try:
         text = DEFAULTS_PATH.read_text(encoding="utf-8")
@@ -226,7 +214,6 @@ def restore_defaults(path: Path = CONFIG_PATH, state_path: Path = STATE_PATH) ->
             backup = path.with_name(path.name + ".bak")
             backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
         path.write_text(text, encoding="utf-8")
-        state_path.unlink(missing_ok=True)
     except OSError as exc:
         print(f"PlanaLyrics: 无法恢复默认设置 ({exc})")
         return False
@@ -286,39 +273,6 @@ def _toml(value: object) -> str:
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
     return repr(value) if isinstance(value, float) else str(value)
-
-
-def load_state(path: Path = STATE_PATH) -> dict:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def save_state(
-    config: Config,
-    panel: tuple[int, int] | None = None,
-    path: Path = STATE_PATH,
-) -> None:
-    payload = {
-        "x": int(config.window.x),
-        "y": int(config.window.y),
-        "default_panel": [int(v) for v in (config.declared_panel or (
-            config.window.panel_width, config.window.panel_height
-        ))],
-    }
-    if panel is not None:
-        payload["panel"] = [int(panel[0]), int(panel[1])]
-    else:
-        previous = load_state(path).get("panel")
-        if previous:
-            payload["panel"] = [int(previous[0]), int(previous[1])]
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    except OSError as exc:
-        print(f"PlanaLyrics: 无法保存 {path} ({exc})")
 
 
 def watch(on_change: Callable[[], None], path: Path = CONFIG_PATH) -> Gio.FileMonitor:
