@@ -15,6 +15,7 @@ file says.
 from __future__ import annotations
 
 import json
+import re
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -32,6 +33,22 @@ DEFAULTS_PATH = Path(__file__).resolve().parent.parent / "config.default.toml"
 # window may be sitting somewhere the clicker cannot reach, so the file cannot be
 # the only channel.
 RESET_REQUEST = CONFIG_DIR / "reset-window"
+
+# The closed sets and shapes the settings file may name. Kept here so a wrong
+# value can be recognised while reading; overlay.py holds the same lists keyed to
+# what it does with them, and a test keeps the two in step.
+TYPE_HINTS = ("normal", "utility", "dock", "notification")
+FONT_WEIGHTS = ("thin", "light", "normal", "medium", "semibold", "bold", "heavy", "black")
+COLOUR_KEYS = (
+    "border_color", "glow_color", "color_current", "color_lyrics", "color_translation",
+    "halo_color", "light_color_current", "light_color_lyrics", "light_color_translation",
+    "light_halo_color",
+)
+_COLOUR_RE = re.compile(r"^#?(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+
+# whether the last read of the settings file had to put the defaults back, so the
+# app can say so rather than letting a wipe happen quietly
+_last_load_restored = False
 
 # when the app last wrote config.toml itself, so the file monitor can tell that
 # apart from the user saving the file and leave it alone
@@ -116,26 +133,142 @@ class Config:
 
 
 def load(path: Path = CONFIG_PATH) -> Config:
-    """Read the settings file, seeding it from the defaults if it is not there.
+    """Read the settings file, or put the shipped defaults back if it is unusable.
 
     Only config.toml is read. Where the window was dragged to and how big it was
     dragged are this session's business: they are not written anywhere, so every
     run opens the window the way the settings file describes. Dragging is for
     trying a shape out; "save current window size" in the menu is what keeps one.
+
+    A file edited by hand can say things that cannot be meant -- a fraction of
+    50, a panel narrower than its own margins, a colour that is not a colour --
+    and the result would be a window nobody can read or click. Since editing the
+    file is no longer the ordinary way to change a setting, the everyday cost of
+    being strict about it is small, and the file that was there is kept beside
+    the defaults it is replaced with.
     """
+    global _last_load_restored
+    _last_load_restored = False
     if not path.exists():
         seed(path)
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
-        print(f"PlanaLyrics: 无法读取 {path} ({exc})，使用默认配置")
-        data = {}
+        return _put_defaults_back(path, [f"读不出来：{exc}"])
 
     config = Config()
     _apply(config.player, data.get("player"))
     _apply(config.window, data.get("window"))
     _apply(config.lyrics, data.get("lyrics"))
+
+    problems = _problems(config)
+    if problems:
+        return _put_defaults_back(path, problems)
     return config
+
+
+def take_restored_flag() -> bool:
+    """True once if the last read had to put the defaults back."""
+    global _last_load_restored
+    restored, _last_load_restored = _last_load_restored, False
+    return restored
+
+
+def _put_defaults_back(path: Path, problems: list[str]) -> Config:
+    """Say what was wrong, then put the defaults back and keep the old file."""
+    for problem in problems:
+        print(f"PlanaLyrics: 设置有问题 —— {problem}")
+    if not restore_defaults(path):
+        return Config()
+    print(f"PlanaLyrics: 已恢复默认设置，原文件保存为 {path.name}.bak")
+    global _last_load_restored
+    _last_load_restored = True
+    return Config()
+
+
+def _problems(config: Config) -> list[str]:
+    """Everything in these settings that cannot be meant.
+
+    Deliberately narrow: a value that is merely unusual is not a problem, so a
+    colour nobody would pick, a tiny panel, or a translation font larger than the
+    lyric font all pass. What fails is the impossible -- something of the wrong
+    kind, a fraction outside its range, or a panel whose own margins leave no
+    room for the text.
+    """
+    found: list[str] = []
+    for section in (config.player, config.window, config.lyrics):
+        for name, value in vars(section).items():
+            if name.startswith("_") or value is None:
+                continue
+            expected = type(getattr(type(section)(), name))
+            if _wrong_kind(expected, value):
+                found.append(f"{name} = {value!r} 不是{_kind_name(expected)}")
+    if found:
+        # comparing a value of the wrong kind would be the next mistake
+        return found
+
+    window, lyrics = config.window, config.lyrics
+    for name in ("anchor_ratio", "context_opacity", "unsung_opacity", "halo_alpha"):
+        if not 0.0 <= getattr(window, name) <= 1.0:
+            found.append(f"{name} = {getattr(window, name)} 应该是一个 0~1 的比例")
+    if not 0.05 <= window.karaoke_tail <= 1.0:
+        found.append(f"karaoke_tail = {window.karaoke_tail} 应该是一个 0~1 的比例")
+    if window.context_scale < 0.05:
+        found.append(f"context_scale = {window.context_scale} 太小，前后句会缩到看不见")
+    if window.karaoke_lift_span < 0.05:
+        found.append(f"karaoke_lift_span = {window.karaoke_lift_span} 太小")
+
+    for name in ("panel_width", "panel_height", "min_panel_width", "min_panel_height",
+                 "font_lyrics", "font_translation", "karaoke_max_ms"):
+        if getattr(window, name) < 1:
+            found.append(f"{name} = {getattr(window, name)} 应该大于 0")
+    if config.player.poll_ms < 1:
+        found.append(f"poll_ms = {config.player.poll_ms} 应该大于 0")
+
+    for name in ("context_lines", "blur_px", "glow_size", "corner_radius", "border_width",
+                 "halo_radius", "line_spacing", "inner_spacing", "padding", "edge_fade",
+                 "karaoke_lift", "animation_ms"):
+        if getattr(window, name) < 0:
+            found.append(f"{name} = {getattr(window, name)} 不能是负数")
+    if config.player.lxmusic_port < 1:
+        found.append(f"lxmusic_port = {config.player.lxmusic_port} 应该是一个端口号")
+
+    if window.padding * 2 >= window.panel_width:
+        found.append(f"padding = {window.padding} 太大，左右留白加起来超过了面板宽度")
+    if window.min_panel_width > window.panel_width:
+        found.append("min_panel_width 比 panel_width 还大")
+    if window.min_panel_height > window.panel_height:
+        found.append("min_panel_height 比 panel_height 还大")
+    if window.edge_fade * 2 >= window.panel_height:
+        found.append(f"edge_fade = {window.edge_fade} 太大，上下渐隐加起来超过了面板高度")
+    if window.font_lyrics >= window.panel_height:
+        found.append(f"font_lyrics = {window.font_lyrics} 比面板还高，一个字也放不下")
+
+    if window.type_hint not in TYPE_HINTS:
+        found.append(f"type_hint = {window.type_hint!r} 应该是 {TYPE_HINTS} 之一")
+    if window.font_weight not in FONT_WEIGHTS:
+        found.append(f"font_weight = {window.font_weight!r} 应该是 {FONT_WEIGHTS} 之一")
+    for name in COLOUR_KEYS:
+        value = getattr(window, name)
+        if not _COLOUR_RE.match(value.strip()):
+            found.append(f"{name} = {value!r} 不是一个颜色（#RRGGBB 或 #RRGGBBAA）")
+    return found
+
+
+def _wrong_kind(expected: type, value: object) -> bool:
+    """Whether a setting is of a kind it cannot be. An int is fine for a float."""
+    if expected is bool:
+        return not isinstance(value, bool)
+    if expected is int:
+        return isinstance(value, bool) or not isinstance(value, int)
+    if expected is float:
+        return isinstance(value, bool) or not isinstance(value, (int, float))
+    return not isinstance(value, expected)
+
+
+def _kind_name(expected: type) -> str:
+    return {int: "整数", float: "数字", bool: "开关（true/false）", str: "文字",
+            list: "列表"}.get(expected, "正确的类型")
 
 
 def seed(path: Path = CONFIG_PATH) -> None:

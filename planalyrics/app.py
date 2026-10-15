@@ -73,6 +73,7 @@ class App:
         self.overlay = Overlay(self.config, self)
         self.players.start()
         self._config_monitor = config_mod.watch(self._on_config_file_changed)
+        self._report_restore()
         self.overlay.set_status(WAITING)
         GLib.timeout_add(TICK_MS, self._tick)
         GLib.timeout_add(POLL_MS, self._poll)
@@ -194,6 +195,34 @@ class App:
         # the lyrics settings decide which sources apply, so they take effect the
         # same way the rest of the file does
         self.reload_lyrics()
+        self._report_restore()
+
+    def _report_restore(self) -> None:
+        """Say that the settings file had to be thrown away, where it will be seen.
+
+        The terminal is the only other place this is written, and a window that
+        came up from the dock has no terminal to read: a reset nobody is told
+        about looks like settings going missing on their own.
+        """
+        if not config_mod.take_restored_flag():
+            return
+        self._notify("设置已恢复为默认",
+                     "配置文件里有无法成立的内容，已恢复默认设置。\n原标题保存为 config.toml.bak。")
+
+    def _notify(self, summary: str, body: str) -> None:
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            bus.call_sync(
+                "org.freedesktop.Notifications",
+                "/org/freedesktop/Notifications",
+                "org.freedesktop.Notifications",
+                "Notify",
+                GLib.Variant("(susssasa{sv}i)",
+                             ("PlanaLyrics", 0, "dialog-warning", summary, body, [], {}, -1)),
+                None, Gio.DBusCallFlags.NONE, 2000, None,
+            )
+        except GLib.Error as exc:
+            print(f"PlanaLyrics: 无法弹出通知（{exc.message}）")
 
     def research(self) -> None:
         if self.track is not None:
