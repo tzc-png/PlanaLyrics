@@ -950,21 +950,31 @@ class Overlay:
         settings = self.config.window
         size = self._font(settings.font_lyrics)
         lines = self.status.splitlines()
-        step = size + settings.line_spacing
-        top = self._panel[1] * settings.anchor_ratio - len(lines) * step / 2
-        return [
-            VisualRow(
-                f"status\x00{i}",
-                text,
-                CURRENT,
-                size,
-                top + i * step,
-                1.0,
-                attention=True,
-                sharp=1.0,
+        # Measure each line as it is drawn rather than stepping by the font size:
+        # a title long enough to wrap takes two visual lines, and a fixed step
+        # would land the line after it on top of that second row -- which is what
+        # the notice shown for a song with no lyric did, its lines collapsing into
+        # each other.
+        heights = [self._drawn_height(text, size, size) or float(size) for text in lines]
+        total = sum(heights) + settings.line_spacing * (len(lines) - 1)
+        top = self._panel[1] * settings.anchor_ratio - total / 2
+        rows = []
+        y = top
+        for i, text in enumerate(lines):
+            rows.append(
+                VisualRow(
+                    f"status\x00{i}",
+                    text,
+                    CURRENT,
+                    size,
+                    y,
+                    1.0,
+                    attention=True,
+                    sharp=1.0,
+                )
             )
-            for i, text in enumerate(lines)
-        ]
+            y += heights[i] + settings.line_spacing
+        return rows
 
     def _unsynced_rows(self) -> list[VisualRow]:
         settings = self.config.window
