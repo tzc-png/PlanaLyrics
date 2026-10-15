@@ -226,6 +226,15 @@ def _problems(config: Config) -> list[str]:
     if config.player.poll_ms < 1:
         found.append(f"poll_ms = {config.player.poll_ms} 应该大于 0")
 
+    # The menu caps font_scale at 166 (a 56px lyric), so a value near these
+    # ceilings is already far past what can be read; beyond them a hand-edited
+    # one turns into a glyph surface too large to rasterise.
+    if window.font_scale > 500:
+        found.append(f"font_scale = {window.font_scale} 太大（最多 500）")
+    for name in ("font_lyrics", "font_translation"):
+        if getattr(window, name) > 400:
+            found.append(f"{name} = {getattr(window, name)} 太大（最多 400）")
+
     for name in ("context_lines", "blur_px", "glow_size", "corner_radius", "border_width",
                  "halo_radius", "line_spacing", "inner_spacing", "padding", "edge_fade",
                  "karaoke_lift", "animation_ms"):
