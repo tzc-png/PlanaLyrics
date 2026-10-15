@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import signal
+import sys
 import threading
 import time
 from pathlib import Path
@@ -64,6 +65,9 @@ class App:
         # is disbelieved (see _on_track_changed)
         self._left_at = 0
         self._left_at_until = 0.0
+        # a reset asked for while nothing was running: this window is opening at
+        # the settings file's position anyway, so the note has done its work
+        config_mod.take_reset_request()
 
         # the overlay's menu lists the players, so it is built after the hub
         self.overlay = Overlay(self.config, self)
@@ -146,9 +150,23 @@ class App:
         GLib.timeout_add(300, self._reload_config_idle)
 
     def _reload_config_idle(self) -> bool:
-        # the file was saved by hand: apply it, but leave a window shape that is
-        # only being tried out alone unless the size itself was what changed
-        self._adopt_config(config_mod.load(), move_window=False, force_panel=False)
+        # The file was saved by hand, or written by an action on the desktop icon.
+        # A reset request is honoured in full -- the window goes back to x/y and
+        # the panel to the file's size -- because it is an explicit "put it back",
+        # and it is the only way an action on the icon can reach a window the
+        # clicker cannot. A hand-saved file is gentler: a window shape that is
+        # only being tried out is left alone unless the size itself changed, and
+        # the window moves only if the position in the file changed.
+        config = config_mod.load()
+        asked = config_mod.take_reset_request()
+        moved = asked or (int(config.window.x), int(config.window.y)) != (
+            int(self.config.window.x), int(self.config.window.y)
+        )
+        self._adopt_config(config, move_window=moved, force_panel=asked)
+        if asked:
+            # the same line the menu prints, so the log reads the same whichever
+            # way the defaults were restored
+            print("PlanaLyrics: 已恢复默认设置")
         return False
 
     def reload_config(self, notify: bool = True) -> None:
@@ -387,7 +405,25 @@ class App:
         return True
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """Start the overlay, or do a one-off job named on the command line.
+
+    The desktop entry offers the jobs as actions on its icon, which is the way
+    back in when the window has ended up somewhere unreachable: the right-click
+    menu belongs to the window, and a window nobody can click has no menu.
+    """
+    args = sys.argv[1:] if argv is None else argv
+    if "--restore-defaults" in args:
+        # the note first: the run in progress sees it when it notices the file
+        config_mod.request_reset()
+        if not config_mod.restore_defaults():
+            # nothing was restored, so leave no note behind for a later reload to
+            # act on
+            config_mod.take_reset_request()
+            return 1
+        print("PlanaLyrics: 已恢复默认设置")
+        return 0
+
     GLib.set_prgname("planalyrics")
     GLib.set_application_name("PlanaLyrics")
     Gtk.init()

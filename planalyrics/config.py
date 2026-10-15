@@ -27,6 +27,11 @@ CONFIG_DIR = Path.home() / ".config" / "PlanaLyrics"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 CACHE_DIR = Path.home() / ".cache" / "PlanaLyrics"
 DEFAULTS_PATH = Path(__file__).resolve().parent.parent / "config.default.toml"
+# A note the desktop icon's actions leave for the run in progress. Restoring the
+# defaults from the icon has to reach a window another process owns, and that
+# window may be sitting somewhere the clicker cannot reach, so the file cannot be
+# the only channel.
+RESET_REQUEST = CONFIG_DIR / "reset-window"
 
 # when the app last wrote config.toml itself, so the file monitor can tell that
 # apart from the user saving the file and leave it alone
@@ -219,6 +224,33 @@ def restore_defaults(path: Path = CONFIG_PATH) -> bool:
         return False
     global _self_write
     _self_write = time.monotonic()
+    return True
+
+
+def request_reset() -> None:
+    """Ask a run in progress to put its window back.
+
+    The icon's "restore default settings" action is its own short-lived process:
+    it can rewrite the settings file, but not move a window that belongs to the
+    run already going. It leaves this note instead, and the run finds it when it
+    looks at the file that was just written.
+    """
+    try:
+        RESET_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+        RESET_REQUEST.touch()
+    except OSError as exc:
+        print(f"PlanaLyrics: 无法写入 {RESET_REQUEST} ({exc})")
+
+
+def take_reset_request() -> bool:
+    """True once if a reset was asked for, and the note is then taken away."""
+    try:
+        RESET_REQUEST.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        print(f"PlanaLyrics: 无法删除 {RESET_REQUEST} ({exc})")
+        return False
     return True
 
 

@@ -14,3 +14,9 @@ Categories=AudioVideo;Audio;Player;
 Keywords=lyrics;lrc;歌词;桌面歌词;
 StartupNotify=false
 StartupWMClass=planalyrics
+Actions=RestoreDefaults;
+
+[Desktop Action RestoreDefaults]
+Name=Restore default settings
+Name[zh_CN]=恢复默认设置
+Exec=@EXEC@ --restore-defaults
