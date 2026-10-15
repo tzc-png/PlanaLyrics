@@ -75,6 +75,6 @@ show_translation = true    # 仅当原文是日语时才显示译文
 [lyrics]
 music_dirs = []            # 本地音乐目录，用于在播放器不给文件路径时反查
 cache_dir = ""
-online_enabled = true      # 本地找不到时就联网搜索
+online_enabled = true      # 联网总开关：关掉后不联网，之前的联网结果也不再使用
 search_translation = true  # 日语歌自己不带中文时，联网补一条中文译文
 offset_ms = 0              # 歌词整体微调，负数=提前

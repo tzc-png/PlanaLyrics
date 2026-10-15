@@ -51,6 +51,10 @@ def resolve(
     manual re-search, which should query the network rather than replay a cached
     answer.
 
+    ``allow_online`` is the master switch: with it off nothing that came from a
+    search is used, the saved results included, so the settings file's switch
+    changes what is on screen rather than appearing not to have taken.
+
     ``search_translation`` decides where a Chinese line may come from. Left on, a
     Japanese song whose own lyrics carry no Chinese borrows one from a match;
     turned off, the only Chinese shown is the Chinese that came with the lyrics.
@@ -70,16 +74,20 @@ def resolve(
         stub = stub or lyrics
 
     if chosen is not None:
-        if search_translation:
-            _add_translation(chosen, track, cache_dir, allow_online)
+        if search_translation and allow_online:
+            _add_translation(chosen, track, cache_dir)
         return chosen
 
-    # nothing of the listener's own: a saved result, then the network. Either way
-    # the lyric arrived carrying its translation, so switching the search off
-    # takes the translation back out rather than leaving it to be looked up.
-    fetched = _from_cache(track, cache_dir) if use_cache else None
-    if fetched is None and allow_online:
-        fetched = _from_online(track, cache_dir)
+    # Nothing of the listener's own. A saved result counts as a searched one --
+    # it is what a search returned last time -- so it is only consulted when
+    # searching is allowed at all; with the search off, a song whose lyric came
+    # from the network shows nothing rather than the same network lyric it showed
+    # before. Turning the search off therefore changes what is on screen at once.
+    fetched = None
+    if allow_online:
+        fetched = _from_cache(track, cache_dir) if use_cache else None
+        if fetched is None:
+            fetched = _from_online(track, cache_dir)
     if fetched is None:
         return stub
     if not search_translation:
@@ -101,17 +109,20 @@ def _from_player(text: str | None) -> Lyrics | None:
     return parsed
 
 
-def _add_translation(parsed: Lyrics, track: Track, cache_dir: Path, allow_online: bool) -> None:
+def _add_translation(parsed: Lyrics, track: Track, cache_dir: Path) -> None:
     """Give a Japanese original the Chinese it does not carry itself.
 
     The saved result is consulted before the network so a song is only looked up
     once. Timestamps rarely agree to the millisecond across sources, so
     translations are matched to the nearest line rather than by exact time.
+
+    Called only where searching is allowed, since both the saved result and the
+    network answer come from a search.
     """
     if not parsed.wants_translation or any(line.translation for line in parsed.lines):
         return
     other = _from_cache(track, cache_dir)
-    if other is None and allow_online:
+    if other is None:
         other = _from_online(track, cache_dir)
     if other is not None:
         _map_translations(parsed, other.lines)
