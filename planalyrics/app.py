@@ -23,6 +23,10 @@ from .players import PlayerHub  # noqa: E402
 
 TICK_MS = 100
 POLL_MS = 500
+# how long a lookup may take before the panel says it is looking: a lyric that
+# is already on disk lands in a few milliseconds, and announcing the search
+# immediately means a flash of title-and-artist between two songs
+LOOKUP_NOTICE_MS = 300
 # a backward step this large is a real seek; anything smaller is the player
 # repeating a stale Position value and must not drag playback back
 SEEK_BACKWARD_TOLERANCE_US = 1_500_000
@@ -49,6 +53,7 @@ class App:
         self.anchor_us = 0
         self.anchor_time = time.monotonic()
         self.generation = 0
+        self._notice_timer = 0
 
         # the overlay's menu lists the players, so it is built after the hub
         self.overlay = Overlay(self.config, self)
@@ -189,12 +194,27 @@ class App:
     def _start_lookup(self, track: Track, use_cache: bool = True) -> None:
         self.generation += 1
         generation = self.generation
-        self.overlay.set_status(f"{track.title}\n{track.artist}\n正在查找歌词…")
+        # Only admit to searching if it takes a moment. A lyric that is already
+        # on disk arrives in a few milliseconds, and the notice would be a flash
+        # of title-and-artist between the old song's last line and the new
+        # song's first -- the previous lyrics stay up until then, which reads as
+        # one song handing over to the next rather than as a jump.
+        if self._notice_timer:
+            GLib.source_remove(self._notice_timer)
+        self._notice_timer = GLib.timeout_add(
+            LOOKUP_NOTICE_MS, self._show_lookup_notice, track, generation
+        )
         threading.Thread(
             target=self._lookup_worker,
             args=(track, generation, use_cache),
             daemon=True,
         ).start()
+
+    def _show_lookup_notice(self, track: Track, generation: int) -> bool:
+        self._notice_timer = 0
+        if generation == self.generation:
+            self.overlay.set_status(f"{track.title}\n{track.artist}\n正在查找歌词…")
+        return False
 
     def _lookup_worker(self, track: Track, generation: int, use_cache: bool) -> None:
         path = None
@@ -222,6 +242,10 @@ class App:
     def _apply_lookup(self, track: Track, generation: int, path: Path | None, lyrics: Lyrics | None) -> bool:
         if generation != self.generation:
             return False
+        # the answer is here, so the "looking for lyrics" notice is not wanted
+        if self._notice_timer:
+            GLib.source_remove(self._notice_timer)
+            self._notice_timer = 0
         if lyrics is not None and lyrics.lines:
             self.lyrics = lyrics
             self.overlay.set_lyrics(lyrics)
