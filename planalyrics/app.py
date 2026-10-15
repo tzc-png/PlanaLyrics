@@ -97,6 +97,22 @@ class App:
     def select_player(self, key: str | None) -> None:
         """Pin a player (or None to go back to following whatever is playing)."""
         self.players.select(key)
+        self.save_setting("player", "pin", key or "")
+
+    def save_setting(self, section: str, key: str, value: object) -> None:
+        """Write a setting changed from the menu into config.toml.
+
+        The menu is a way of editing the file, so what it changes has to survive
+        the run -- otherwise a setting would quietly revert on restart.
+        """
+        config_mod.save_values({section: {key: value}})
+
+    def restore_defaults(self) -> None:
+        """Put the shipped defaults back, in the file and on screen."""
+        if not config_mod.restore_defaults():
+            return
+        self.reload_config(notify=False)
+        print("PlanaLyrics: 已恢复默认设置")
 
     # -- config ----------------------------------------------------------
 
@@ -132,7 +148,7 @@ class App:
 
     def adjust_offset(self, delta_ms: int | None) -> None:
         self.config.lyrics.offset_ms = 0 if delta_ms is None else self.config.lyrics.offset_ms + delta_ms
-        config_mod.save_state(self.config, panel=self.overlay.panel_size())
+        self.save_setting("lyrics", "offset_ms", self.config.lyrics.offset_ms)
         self.overlay.force_redraw()
         print(f"PlanaLyrics: 歌词偏移 {self.config.lyrics.offset_ms} ms")
 
@@ -256,7 +272,11 @@ class App:
             if self.playing:
                 elapsed_us = int((time.monotonic() - self.anchor_time) * 1_000_000)
             t_ms = (self.anchor_us + elapsed_us) / 1000.0 + self.config.lyrics.offset_ms
-            self.overlay.set_index(self.lyrics.index_at(int(t_ms)))
+            # Before the first timestamp there is no line to be on, so the first
+            # one waits in the centre rather than sitting below an empty middle.
+            # Its sweep starts from zero and does not move until its own moment
+            # arrives, which is exactly what a negative progress works out to.
+            self.overlay.set_index(max(0, self.lyrics.index_at(int(t_ms))))
             # hand the overlay the clock as well as the line: it reads it forward
             # between ticks so the karaoke sweep moves at frame rate
             self.overlay.set_position(t_ms, self.playing)

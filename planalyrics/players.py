@@ -30,7 +30,6 @@ class PlayerHub(GObject.Object):
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         self.sources: dict[str, GObject.Object] = {}
         self.active: GObject.Object | None = None
-        self._manual: str | None = None
         self._playing_since: dict[str, float] = {}
         self._timer = 0
 
@@ -112,12 +111,11 @@ class PlayerHub(GObject.Object):
             self._set_active(None)
             return
 
-        for wanted in (self.pin, self._manual):
-            if wanted:
-                match = next((s for s in connected if s.key == wanted), None)
-                if match is not None:
-                    self._set_active(match)
-                    return
+        if self.pin:
+            match = next((s for s in connected if s.key == self.pin), None)
+            if match is not None:
+                self._set_active(match)
+                return
 
         playing = [s for s in connected if s.status == "Playing"]
         if playing:
@@ -141,10 +139,13 @@ class PlayerHub(GObject.Object):
     # -- manual control --------------------------------------------------
 
     def select(self, key: str | None) -> None:
-        self._manual = key
+        """Follow ``key`` from now on, or None to follow whatever is playing.
+
+        The pin is the one place this is held, so writing it to the settings file
+        leaves nothing to drift out of step.
+        """
+        self.pin = key or ""
         self._choose()
-        if key is None:
-            self._choose()
 
     def available(self) -> list[tuple[str, str, bool]]:
         return sorted(
@@ -161,7 +162,7 @@ class PlayerHub(GObject.Object):
 
     def pinned_key(self) -> str:
         """The player the user pinned, or "" when following whatever plays."""
-        return self.pin or self._manual or ""
+        return self.pin or ""
 
     # -- the surface the app uses ----------------------------------------
 

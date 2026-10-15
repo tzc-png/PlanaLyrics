@@ -34,6 +34,13 @@ if [[ ! -f "$launcher" ]]; then
 fi
 chmod +x "$launcher"
 
+# the app reads the shipped defaults at run time: they seed a first run and they
+# are what "restore defaults" puts back
+if [[ ! -f "$root/config.default.toml" ]]; then
+    echo "cannot find $root/config.default.toml" >&2
+    exit 1
+fi
+
 # icons first: a launcher with no icon looks broken
 shopt -s nullglob
 copied=0

@@ -1,0 +1,78 @@
+# PlanaLyrics -- 歌词覆盖层配置
+# 改完保存即自动生效，不需要重启。
+#
+# 颜色格式为 #RRGGBBAA，最后两位是不透明度：FF=完全不透明，00=全透明。
+#
+# 这个文件是项目自带的默认设置：首次运行会复制到 ~/.config/PlanaLyrics/，
+# 右键菜单里的「恢复默认设置」也用它覆盖当前设置。
+
+[player]
+# 留空 = 自动跟随正在播放的来源：MyUne Music、浏览器（B站等）、LX Music 都支持
+# 想固定某一个就填它的名字，例如 "org.mpris.MediaPlayer2.myune_music" 或 "lxmusic"
+pin = ""
+lxmusic_port = 23330       # LX Music 的“开放 API”端口（需在 LX Music 设置里打开）
+poll_ms = 500              # 向播放器查询播放位置的间隔（毫秒），中间会自行插值
+
+[window]
+# 窗口位置：默认放在左上角，换一台不同分辨率的屏幕也不会跑到可视范围之外。
+# 用鼠标拖动后会记住你放到哪儿。
+x = 0
+y = 0
+type_hint = "normal"        # normal / utility / dock / notification
+show_in_taskbar = true      # true = 出现在左侧坞栏里（也能从应用程序列表启动）
+
+# 面板：固定尺寸，中间透明，只有最外层一圈描边
+# 下面的宽高是“默认大小”，拖动窗口边缘调整后会把实际大小记住。
+panel_width = 578
+panel_height = 287
+min_panel_width = 320      # 拖动缩放时的最小尺寸
+min_panel_height = 120
+corner_radius = 14
+border_width = 2
+border_color = "#FFFFFF8C"
+glow_size = 10             # 描边外侧的柔和光晕宽度（像素），0 = 关闭
+glow_color = "#00000059"   # 深色=外阴影（浅色壁纸下边界更清楚）；白色则像发光
+
+# 歌词排版（字号会随面板缩放自动等比变化）
+anchor_ratio = 0.5         # 当前句在面板里的垂直位置：0=顶部 1=底部
+context_lines = 1          # 当前句前后各显示几句
+context_opacity = 0.2     # 前后那几句的不透明度（淡到背景里，不抢当前句）
+context_scale = 0.75       # 前后那几句的字号比例（切句时会平滑放大/缩小）
+blur_px = 5                # 前后那几句的模糊半径（像素）：0=不模糊，越大越糊
+karaoke = true             # 当前句按时间从左到右“唱到哪亮到哪”
+unsung_opacity = 0.35      # 还没唱到的部分的亮度（相对已唱部分），0 = 完全看不见
+karaoke_tail = 0.88        # 扫描在“距下一句还有多少比例”时结束：1 = 一直扫到下一句
+karaoke_max_ms = 6000      # 单句扫描的最长毫秒数，间隔很长时不会慢慢扫一整天
+font_family = "Noto Sans CJK SC"
+font_weight = "black"      # thin/light/normal/medium/semibold/bold/heavy/black
+font_lyrics = 34           # 当前句字号（前后句按 context_scale 缩小）
+font_translation = 23      # 译文行
+line_spacing = 24          # 相邻两句之间的间距
+inner_spacing = 3          # 一句歌词与它自己的译文之间的间距
+padding = 28               # 文字与面板左右边缘的距离
+edge_fade = 14             # 面板上下边缘的文字渐隐高度
+
+# 文字：深色壁纸下用这套
+color_current = "#FFFFFFFF"    # 当前句
+color_lyrics = "#FFFFFFFF"     # 其他句（再乘以上面的不透明度）
+color_translation = "#FFFFFFA6"
+halo_radius = 0                # 0 = 纯色字，不加描边
+halo_color = "#000000"         # halo_radius > 0 时才生效
+halo_alpha = 0.9
+
+# 文字：浅色壁纸下用这套（近黑字 + 中灰译文 + 白色描边）
+adapt_to_background = true     # 按面板背后壁纸的明暗自动切换以上两套
+light_color_current = "#0A0A0AFF"
+light_color_lyrics = "#0A0A0AFF"
+light_color_translation = "#5A6270FF"
+light_halo_color = "#FFFFFF"
+
+animation_ms = 500         # 滚动到下一句所需时间；0 = 直接跳转
+show_translation = true    # 仅当原文是日语时才显示译文
+
+[lyrics]
+music_dirs = []            # 本地音乐目录，用于在播放器不给文件路径时反查
+cache_dir = ""
+online_enabled = true      # 本地找不到时就联网搜索
+search_translation = true  # 日语歌自己不带中文时，联网补一条中文译文
+offset_ms = 0              # 歌词整体微调，负数=提前

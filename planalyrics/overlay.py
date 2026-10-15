@@ -58,7 +58,11 @@ ANIMATION_FRAME_MS = 16
 INVISIBLE = 0.02
 HALO_FADE_FLOOR = 0.55
 TEXT_CACHE_LIMIT = 32
-BLUR_DOWNSCALE = 4
+# the downscale is itself part of the blur, and at 1/4 it contributed more of the
+# softening than the box passes did: the neighbours came out as a smudge whose
+# strokes were gone, with a line and its translation merged into one dark mass.
+# At 1/2 the blur is still real but the text stays readable behind it.
+BLUR_DOWNSCALE = 2
 BLUR_PASSES = 3           # must not change between sliding and still: a weaker
                           # blur mid-slide reads as the lines getting bolder
 BACKGROUND_SAMPLE_MS = 500
@@ -138,6 +142,8 @@ class Overlay:
         self._cursor_name: str | None = None
         self._cursors: dict[str, Gdk.Cursor] = {}
         self._blur_buffer = None
+        self._blur_surface = None
+        self._blur_key: tuple | None = None
         self._text_cache: dict[tuple, tuple] = {}
         self._font_options = cairo.FontOptions()
         self._font_options.set_antialias(cairo.Antialias.GRAY)
@@ -199,7 +205,6 @@ class Overlay:
         self.window = window
         self.area = area
         self._build_menu()
-        self._apply_click_through()
         self._apply_panel_size()
         GLib.timeout_add(400, self._sample_background)
         GLib.timeout_add(BACKGROUND_SAMPLE_MS, self._on_sample_tick)
@@ -225,11 +230,6 @@ class Overlay:
     def _reassert_above(self) -> bool:
         self.window.set_keep_above(True)
         return False
-
-    def _apply_click_through(self) -> None:
-        gdk_window = self.window.get_window()
-        if gdk_window is not None:
-            gdk_window.set_pass_through(bool(self.config.window.click_through))
 
     def _margin(self) -> int:
         return max(0, int(self.config.window.glow_size))
@@ -297,11 +297,11 @@ class Overlay:
         self.config = config
         self._panel = (int(config.window.panel_width), int(config.window.panel_height))
         self._text_cache.clear()
+        self._blur_key = None             # colours and blur size may have changed
         self.window.set_type_hint(HINTS.get(config.window.type_hint, Gdk.WindowTypeHint.UTILITY))
         self.window.set_keep_above(True)
         self.window.move(config.window.x, config.window.y)
         self._build_menu()
-        self._apply_click_through()
         self._apply_panel_size()
         self._sample_background()
         self._snap()
@@ -624,12 +624,16 @@ class Overlay:
             ("联网搜索中文译文", "lyrics", "search_translation"),
             ("逐字进度（唱到哪亮到哪）", "window", "karaoke"),
             ("跟随壁纸明暗", "window", "adapt_to_background"),
-            ("鼠标穿透（不可拖动）", "window", "click_through"),
         ):
             check = Gtk.CheckMenuItem(label=label)
             check.set_active(bool(getattr(getattr(self.config, section), attribute)))
             check.connect("toggled", self._on_toggle, section, attribute)
             menu.append(check)
+
+        menu.append(Gtk.SeparatorMenuItem())
+        item = Gtk.MenuItem(label="恢复默认设置")
+        item.connect("activate", lambda *_args: self.app.restore_defaults())
+        menu.append(item)
 
         menu.show_all()
         self.menu = menu
@@ -677,8 +681,7 @@ class Overlay:
 
     def _on_toggle(self, item: Gtk.CheckMenuItem, section: str, attribute: str) -> None:
         setattr(getattr(self.config, section), attribute, item.get_active())
-        if attribute == "click_through":
-            self._apply_click_through()
+        self.app.save_setting(section, attribute, item.get_active())
         if attribute == "adapt_to_background":
             self._sample_background()
         if attribute == "search_translation":
@@ -992,7 +995,7 @@ class Overlay:
 
         small_w = max(1, width // BLUR_DOWNSCALE)
         small_h = max(1, height // BLUR_DOWNSCALE)
-        blurred_surface = self._render_blur(rows, small_w, small_h, blur_px)
+        blurred_surface = self._blurred_layer(rows, small_w, small_h, blur_px)
 
         pattern = cairo.SurfacePattern(blurred_surface)
         pattern.set_filter(cairo.Filter.BILINEAR)
@@ -1001,6 +1004,27 @@ class Overlay:
         pattern.set_matrix(cairo.Matrix(1.0 / BLUR_DOWNSCALE, 0, 0, 1.0 / BLUR_DOWNSCALE, 0, 0))
         cr.set_source(pattern)
         cr.paint()
+
+    def _blurred_layer(self, rows, small_w: int, small_h: int, blur_px: int):
+        """The blurred layer, rebuilt only when what goes into it changes.
+
+        While a line plays it does not change at all: the line being sung is
+        drawn crisp and takes no part in the blur, and the neighbours sit still.
+        Rasterising and blurring this every frame cost about 30% of a core for a
+        picture that was identical each time.
+        """
+        key = (
+            small_w, small_h, blur_px, round(self._theme_mix, 4),
+            tuple(
+                (row.key, row.text, row.role, round(row.size, 2), round(row.y, 2),
+                 round(row.alpha, 4), round(row.sharp, 4))
+                for row in rows
+            ),
+        )
+        if key != self._blur_key:
+            self._blur_surface = self._render_blur(rows, small_w, small_h, blur_px)
+            self._blur_key = key
+        return self._blur_surface
 
     def _render_blur(self, rows, small_w: int, small_h: int, blur_px: int):
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, small_w, small_h)
@@ -1017,7 +1041,10 @@ class Overlay:
             small_h, small_w, 4
         )
         # the downscale is itself part of the blur, so the box radius stays small
-        radius = max(1, int(round(blur_px / (1.25 * BLUR_DOWNSCALE))))
+        # a radius of zero leaves the box passes out and lets the downscale do the
+        # softening, which is the lightest step -- so blur_px moves in small
+        # increments instead of jumping by whole tap widths
+        radius = max(0, int(round(blur_px / (1.25 * BLUR_DOWNSCALE))))
         blurred = pixels.astype(np.float32)
         for _ in range(BLUR_PASSES):
             blurred = _box_blur(blurred, radius, 0)
