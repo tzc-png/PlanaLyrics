@@ -93,6 +93,7 @@ class WindowConfig:
     font_weight: str = "black"
     font_lyrics: int = 34
     font_translation: int = 23
+    font_scale: int = 100
     line_spacing: int = 24
     inner_spacing: int = 3
     padding: int = 28
@@ -219,7 +220,7 @@ def _problems(config: Config) -> list[str]:
         found.append(f"karaoke_lift_span = {window.karaoke_lift_span} 太小")
 
     for name in ("panel_width", "panel_height", "min_panel_width", "min_panel_height",
-                 "font_lyrics", "font_translation", "karaoke_max_ms"):
+                 "font_lyrics", "font_translation", "font_scale", "karaoke_max_ms"):
         if getattr(window, name) < 1:
             found.append(f"{name} = {getattr(window, name)} 应该大于 0")
     if config.player.poll_ms < 1:
@@ -241,8 +242,6 @@ def _problems(config: Config) -> list[str]:
         found.append("min_panel_height 比 panel_height 还大")
     if window.edge_fade * 2 >= window.panel_height:
         found.append(f"edge_fade = {window.edge_fade} 太大，上下渐隐加起来超过了面板高度")
-    if window.font_lyrics >= window.panel_height:
-        found.append(f"font_lyrics = {window.font_lyrics} 比面板还高，一个字也放不下")
 
     if window.type_hint not in TYPE_HINTS:
         found.append(f"type_hint = {window.type_hint!r} 应该是 {TYPE_HINTS} 之一")

@@ -15,7 +15,7 @@ poll_ms = 500              # 向播放器查询播放位置的间隔（毫秒）
 
 [window]
 # 窗口位置：默认放在左上角，换一台不同分辨率的屏幕也不会跑到可视范围之外。
-# 鼠标拖动只影响本次运行，不会写回这里；想固定就改这两个数字。
+# 鼠标拖动只影响本次运行；想固定当前位置，用右键菜单「窗口 → 保存窗口大小和位置」。
 x = 0
 y = 0
 type_hint = "normal"        # normal / utility / dock / notification
@@ -23,7 +23,7 @@ show_in_taskbar = true      # true = 出现在左侧坞栏里（也能从应用�
 
 # 面板：固定尺寸，中间透明，只有最外层一圈描边
 # 下面的宽高是每次启动时的大小；拖边缘调整只影响本次运行，
-# 想把某个尺寸定下来，用右键菜单「显示 → 保存当前窗口大小」。
+# 想把某个尺寸和位置定下来，用右键菜单「窗口 → 保存窗口大小和位置」。
 panel_width = 578
 panel_height = 287
 min_panel_width = 320      # 拖动缩放时的最小尺寸
@@ -34,7 +34,7 @@ border_color = "#FFFFFF8C"
 glow_size = 10             # 描边外侧的柔和光晕宽度（像素），0 = 关闭
 glow_color = "#00000059"   # 深色=外阴影（浅色壁纸下边界更清楚）；白色则像发光
 
-# 歌词排版（字号会随面板缩放自动等比变化）
+# 歌词排版（字号与窗口大小无关，用右键菜单「窗口 → 增大/减小字号」调整）
 anchor_ratio = 0.5         # 当前句在面板里的垂直位置：0=顶部 1=底部
 context_lines = 1          # 当前句前后各显示几句
 context_opacity = 0.2     # 前后那几句的不透明度（淡到背景里，不抢当前句）
@@ -48,8 +48,9 @@ karaoke_lift = 4           # 已唱到的字比未唱的高出多少像素；0 =
 karaoke_lift_span = 1.4    # 抬起一个字要花几个字的宽度：1=就在这个字内抬完，越大相邻的字越会被带着动
 font_family = "Noto Sans CJK SC"
 font_weight = "black"      # thin/light/normal/medium/semibold/bold/heavy/black
-font_lyrics = 34           # 当前句字号（前后句按 context_scale 缩小）
-font_translation = 23      # 译文行
+font_lyrics = 34           # 当前句字号（font_scale=100 时；前后句按 context_scale 缩小）
+font_translation = 23      # 译文行（font_scale=100 时）
+font_scale = 100           # 字号缩放百分比：右键菜单「窗口 → 增大/减小字号」改这个
 line_spacing = 24          # 相邻两句之间的间距
 inner_spacing = 3          # 一句歌词与它自己的译文之间的间距
 padding = 28               # 文字与面板左右边缘的距离

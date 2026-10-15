@@ -77,6 +77,9 @@ KARAOKE_FRAME_MS = 16
 # Only redraw once the edge has moved this far along the line -- about a fifth of
 # a pixel on a full-width one, so the sweep is smooth without a frame per tick.
 WIPE_EPSILON = 0.0015
+# the lyric size karaoke_lift's pixels were tuned at: the lift scales with the
+# font so it keeps the same share of the glyph height as the font changes
+KARAOKE_LIFT_REFERENCE = 34.0
 
 
 @dataclass
@@ -244,13 +247,6 @@ class Overlay:
             self._text_cache.clear()      # the wrap width changed
             self.area.set_size_request(*size)
 
-    def font_scale(self) -> float:
-        """Lyrics scale with the panel so a resized window keeps its proportions."""
-        settings = self.config.window
-        base_w = max(1, int(settings.panel_width))
-        base_h = max(1, int(settings.panel_height))
-        return min(self._panel[0] / base_w, self._panel[1] / base_h)
-
     # -- public API ------------------------------------------------------
 
     def set_lyrics(self, lyrics: Lyrics) -> None:
@@ -295,6 +291,10 @@ class Overlay:
     def panel_size(self) -> tuple[int, int]:
         return self._panel
 
+    def window_position(self) -> tuple[int, int]:
+        """Where the window sits now, to be saved as the place it opens at."""
+        return self.window.get_position()
+
     def apply_config(self, config: Config, move_window: bool = False,
                      force_panel: bool = False) -> None:
         """Adopt a settings file.
@@ -302,9 +302,9 @@ class Overlay:
         ``force_panel`` takes the file's panel size even when it has not changed,
         which is what "reload config" means: the size on screen may have been
         dragged away from what the file says. ``move_window`` puts the window
-        back where the file says it belongs, and only "restore defaults" does
-        that -- where the window opens is settled at startup, and dragging it
-        around is this session's business.
+        back where the file says it belongs; "reload config" and "restore
+        defaults" both ask for that, since a position in the file is meant to be
+        where the window sits.
         """
         declared = (int(config.window.panel_width), int(config.window.panel_height))
         if force_panel or declared != (int(self.config.window.panel_width),
@@ -315,12 +315,31 @@ class Overlay:
         self._blur_key = None             # colours and blur size may have changed
         self.window.set_type_hint(HINTS.get(config.window.type_hint, Gdk.WindowTypeHint.UTILITY))
         self.window.set_keep_above(True)
-        if move_window:
-            self.window.move(config.window.x, config.window.y)
         self._build_menu()
         self._apply_panel_size()
-        self._sample_background()
+        if move_window:
+            # deferred: the move must reach the window manager after the new size
+            # does -- see _move_window
+            GLib.idle_add(self._move_window, int(config.window.x), int(config.window.y))
+        else:
+            self._sample_background()
         self._snap()
+
+    def _move_window(self, x: int, y: int) -> bool:
+        """Put the window where the settings file says, once the new size is in.
+
+        A move sent while the window still has its old size is clamped by the
+        window manager whenever that size would not fit where it is being sent:
+        a large panel sent to a bottom corner is pushed back on screen, and the
+        resize that follows does not put it back where it was asked to go. That
+        left the first "reload config" landing in the wrong place, and only a
+        second one -- with nothing left to resize -- getting it right.
+        set_size_request applies on a GTK idle, so this waits for one, which runs
+        after the resize and sends the move with the new size already in place.
+        """
+        self.window.move(x, y)
+        self._sample_background()
+        return False
 
     # -- animation -------------------------------------------------------
 
@@ -621,10 +640,11 @@ class Overlay:
             item.set_sensitive(False)
             menu.append(item)
 
-        def action(label: str, callback) -> None:
+        def action(label: str, callback):
             item = Gtk.MenuItem(label=label)
             item.connect("activate", lambda *_args: callback())
             menu.append(item)
+            return item
 
         def toggle(label: str, section: str, attribute: str) -> None:
             item = Gtk.CheckMenuItem(label=label)
@@ -645,10 +665,16 @@ class Overlay:
             action(label, lambda d=delta: self.app.adjust_offset(d))
 
         menu.append(Gtk.SeparatorMenuItem())
+        heading("窗口")
+        action("增大字号", lambda: self.app.adjust_font(+1))
+        shrink = action("减小字号", lambda: self.app.adjust_font(-1))
+        shrink.set_sensitive(self.app.font_can_shrink())
+        action("保存窗口大小和位置", self.app.save_window_geometry)
+
+        menu.append(Gtk.SeparatorMenuItem())
         heading("显示")
         toggle("逐字进度（唱到哪亮到哪）", "window", "karaoke")
         toggle("跟随壁纸明暗", "window", "adapt_to_background")
-        action("保存当前窗口大小", self.app.save_window_size)
 
         menu.append(Gtk.SeparatorMenuItem())
         heading("程序")
@@ -715,8 +741,15 @@ class Overlay:
 
     # -- lyric layout ----------------------------------------------------
 
-    def _font(self, size: int) -> int:
-        return max(6, int(round(size * self.font_scale())))
+    def _font(self, size: float) -> int:
+        """The size a line is drawn at: the configured size at the menu's scale.
+
+        Font size no longer scales with the panel -- the window and the text are
+        sized independently, the text from the menu. The menu moves font_scale, so
+        every size is that proportion of the value in the file. The floor keeps a
+        pathological context_scale from collapsing the neighbours to nothing.
+        """
+        return max(6, int(round(size * self.config.window.font_scale / 100)))
 
     def _wrap_width(self) -> int:
         return max(1, int(self._panel[0] - 2 * self.config.window.padding))
@@ -1348,7 +1381,13 @@ class Overlay:
         # keeps them meeting at the same vertical edge. The lift is scaled by how
         # crisp the row is, so a line sinking into the background as it is left
         # behind puts its raised characters down smoothly instead of dropping them.
-        lift = max(0, float(settings.karaoke_lift)) * self.font_scale() * row.sharp
+        # the lift is a pixel count tuned at the default lyric size; it scales with
+        # the effective font so it keeps the same share of the glyph height
+        lift = (
+            max(0.0, float(settings.karaoke_lift))
+            * (self._font(settings.font_lyrics) / KARAOKE_LIFT_REFERENCE)
+            * row.sharp
+        )
         span = max(0.2, float(settings.karaoke_lift_span))
         for piece, sung, raised in self._wipe_rects(lines, pad, factor, progress, lift, span):
             ctx.save()

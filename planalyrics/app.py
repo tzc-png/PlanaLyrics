@@ -38,6 +38,14 @@ SEEK_BACKWARD_TOLERANCE_US = 1_500_000
 NEW_TRACK_GRACE_S = 3.0
 STALE_POSITION_US = 3_000_000
 WAITING = "等待 MyUne Music…"
+# The menu's 增大/减小 moves font_scale by this many percent a press. The step is
+# on the scale, not the pixels, so the larger lyric font and the smaller
+# translation font each move in proportion to their own size, and an integer step
+# up is exactly undone by the same step down.
+FONT_SCALE_STEP = 6
+# the lowest font_scale the menu will reach: below it the lyric font falls under
+# 12px or the translation under 8px
+FONT_SCALE_FLOOR = 34
 
 
 class App:
@@ -87,32 +95,23 @@ class App:
     def quit(self) -> None:
         Gtk.main_quit()
 
-    def save_window_size(self) -> None:
-        """Make the window's current size the one it opens at from now on.
+    def save_window_geometry(self) -> None:
+        """Make the window's current size and place the ones it opens at.
 
-        Dragging is provisional, so this is how a size becomes permanent. The text
-        scales with the panel, so the panel's dimensions are only half of what has
-        to be written: the font sizes are part of the same reference, and leaving
-        them alone would shrink the text the moment this panel became the one
-        everything is measured against.
+        Dragging is provisional, so this is how a size and a place become
+        permanent. Font size is independent of the panel and is changed from the
+        menu, so only the panel's dimensions and the window's position are written.
         """
         width, height = self.overlay.panel_size()
-        scale = self.overlay.font_scale()
+        x, y = self.overlay.window_position()
         window = self.config.window
-        scaled = {
-            "font_lyrics": max(6, round(window.font_lyrics * scale)),
-            "font_translation": max(6, round(window.font_translation * scale)),
-            "karaoke_lift": max(0, round(window.karaoke_lift * scale)),
-        }
         config_mod.save_values(
-            {"window": {"panel_width": width, "panel_height": height, **scaled}}
+            {"window": {"panel_width": width, "panel_height": height, "x": x, "y": y}}
         )
         window.panel_width, window.panel_height = width, height
-        for key, value in scaled.items():
-            setattr(window, key, value)
-        # the panel on screen is the size being saved, so take it as the reference
+        window.x, window.y = x, y
         self.overlay.apply_config(self.config, force_panel=True)
-        print(f"PlanaLyrics: 已保存窗口大小 {width}×{height}")
+        print(f"PlanaLyrics: 已保存窗口大小和位置 {width}×{height} @ ({x}, {y})")
 
     def open_config_folder(self) -> None:
         """Open the folder holding config.toml, where every setting lives."""
@@ -171,13 +170,13 @@ class App:
         return False
 
     def reload_config(self, notify: bool = True) -> None:
-        """Apply the settings file again, the window's size included.
+        """Apply the settings file again: the window's size and place included.
 
-        The window's place is not part of this: it was dragged to, and where it
-        opens is settled once, at startup, from x and y. Restoring the defaults
-        is the one that puts the place back as well.
+        The window is put back where the file says it belongs, so a hand-edited
+        x/y -- or a position saved from the menu -- takes effect without a
+        restart, the same way restoring the defaults already does.
         """
-        self._adopt_config(config_mod.load(), move_window=False, force_panel=True)
+        self._adopt_config(config_mod.load(), move_window=True, force_panel=True)
         if notify:
             print("PlanaLyrics: 配置已重载")
 
@@ -242,6 +241,29 @@ class App:
         self.save_setting("lyrics", "offset_ms", self.config.lyrics.offset_ms)
         self.overlay.force_redraw()
         print(f"PlanaLyrics: 歌词偏移 {self.config.lyrics.offset_ms} ms")
+
+    def adjust_font(self, direction: int) -> None:
+        """Move both font sizes one step up (+1) or down (-1).
+
+        The step is applied to font_scale, the percentage the lyric and
+        translation fonts are drawn at, so the two fonts move in proportion to
+        their own sizes. An integer step on the scale is exactly undone by the
+        same step in the other direction.
+        """
+        window = self.config.window
+        scale = window.font_scale + (FONT_SCALE_STEP if direction > 0 else -FONT_SCALE_STEP)
+        if scale < FONT_SCALE_FLOOR:
+            return
+        window.font_scale = scale
+        config_mod.save_values({"window": {"font_scale": scale}})
+        self.overlay.force_redraw()
+        lyrics = int(round(window.font_lyrics * scale / 100))
+        translation = int(round(window.font_translation * scale / 100))
+        print(f"PlanaLyrics: 字号 {lyrics}/{translation}")
+
+    def font_can_shrink(self) -> bool:
+        """Whether one more step down keeps the fonts above their floors."""
+        return self.config.window.font_scale - FONT_SCALE_STEP >= FONT_SCALE_FLOOR
 
     # -- MPRIS events ----------------------------------------------------
 
