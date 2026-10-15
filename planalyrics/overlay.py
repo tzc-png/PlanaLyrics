@@ -66,7 +66,6 @@ BLUR_DOWNSCALE = 2
 BLUR_PASSES = 3           # must not change between sliding and still: a weaker
                           # blur mid-slide reads as the lines getting bolder
 BACKGROUND_SAMPLE_MS = 500
-BACKGROUND_SAMPLE_BAND = 6
 # the light/dark text colour fades between the two schemes rather than flipping
 THEME_FADE_MS = 700
 THEME_FRAME_MS = 16
@@ -451,47 +450,38 @@ class Overlay:
         return True
 
     def _sample_background(self) -> bool:
-        """Decide light or dark text from what is behind the panel.
+        """Decide light or dark text from what the words are actually over.
 
-        Samples thin bands just outside the window, which are guaranteed to show
-        the desktop rather than our own lyrics.
+        That is the panel itself, so the panel is what gets sampled. A strip
+        outside it only guesses at what the panel covers: it is wrong wherever
+        the panel is against a screen edge, and wrong again wherever what is
+        beside the panel is not what is under it.
+
+        The median, not the mean, because our own lyrics are in the same region.
+        They cover a fifth of the panel at most, so the middle value is the
+        desktop behind them, and the reading does not swing about with how much
+        text happens to be on screen -- or with whether the clever choice of
+        colour is the one that is currently drawn.
         """
         settings = self.config.window
         if not settings.adapt_to_background:
             self._set_theme(True)
             return False
-        gdk_window = self.window.get_window()
         root = Gdk.get_default_root_window()
-        if gdk_window is None or root is None or self._size is None:
+        if self.window.get_window() is None or root is None or self._size is None:
             return False
 
         x, y = self.window.get_position()
-        width, height = self._size
-        band = BACKGROUND_SAMPLE_BAND
-        # One strip per sample: grabbing the root window makes the compositor
-        # produce pixels and costs ~6 ms whatever the size, so sampling often is
-        # affordable but sampling widely is not. The strip just above the panel is
-        # the better proxy; if it is off-screen, the one below is used instead.
-        bands = (
-            (x, y - band, width, band),
-            (x, y + height, width, band),
-        )
-        luma = None
-        for bx, by, bw, bh in bands:
-            if bw <= 0 or bh <= 0:
-                continue
-            try:
-                pixbuf = Gdk.pixbuf_get_from_window(root, bx, by, bw, bh)
-            except Exception:
-                pixbuf = None
-            if pixbuf is None:
-                continue
-            luma = _mean_luma(pixbuf)
-            break
-
-        if luma is None:
+        # the surface carries the glow margin, so the panel starts that far in
+        x, y = x + self._margin(), y + self._margin()
+        width, height = self._panel
+        try:
+            pixbuf = Gdk.pixbuf_get_from_window(root, x, y, width, height)
+        except Exception:
+            pixbuf = None
+        if pixbuf is None:
             return False
-        self._set_theme(luma < 128.0)
+        self._set_theme(_median_luma(pixbuf) < 128.0)
         return False
 
     # -- input -----------------------------------------------------------
@@ -1428,7 +1418,13 @@ def _box_blur(values: np.ndarray, radius: int, axis: int) -> np.ndarray:
     return np.moveaxis(out, 0, axis)
 
 
-def _mean_luma(pixbuf) -> float:
+def _median_luma(pixbuf) -> float:
+    """The middle brightness of a captured region.
+
+    Every other pixel is used: the panel is large enough that halving the sample
+    changes nothing about which side of the middle it lands on, and this runs
+    twice a second.
+    """
     width, height = pixbuf.get_width(), pixbuf.get_height()
     channels = pixbuf.get_n_channels()
     stride = pixbuf.get_rowstride()
@@ -1438,8 +1434,8 @@ def _mean_luma(pixbuf) -> float:
     padded = np.zeros(stride * height, dtype=np.uint8)
     padded[: min(raw.size, padded.size)] = raw[: padded.size]
     rows = padded.reshape(height, stride)[:, : width * channels]
-    pixels = rows.reshape(height, width, channels)[:, :, :3].astype(np.float32)
-    return float(pixels.mean())
+    pixels = rows.reshape(height, width, channels)[::2, ::2, :3].astype(np.float32)
+    return float(np.median(pixels))
 
 
 def _interpolate(from_rows: list[VisualRow], to_rows: list[VisualRow], p: float) -> list[VisualRow]:
