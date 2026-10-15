@@ -4,3 +4,6 @@ __pycache__/
 
 # Claude Code local settings (machine-specific permission allowlist)
 .claude/settings.local.json
+
+# Scratch material for debugging (sample audio, lyrics); emptied at will
+debug/
