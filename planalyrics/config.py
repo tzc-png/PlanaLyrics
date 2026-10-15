@@ -69,8 +69,8 @@ class WindowConfig:
     y: int = 0
     type_hint: str = "normal"
     show_in_taskbar: bool = True
-    panel_width: int = 578
-    panel_height: int = 287
+    panel_width: int = 512
+    panel_height: int = 256
     min_panel_width: int = 320
     min_panel_height: int = 120
     corner_radius: int = 14

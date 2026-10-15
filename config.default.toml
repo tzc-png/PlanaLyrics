@@ -24,8 +24,8 @@ show_in_taskbar = true      # true = 出现在左侧坞栏里（也能从应用�
 # 面板：固定尺寸，中间透明，只有最外层一圈描边
 # 下面的宽高是每次启动时的大小；拖边缘调整只影响本次运行，
 # 想把某个尺寸和位置定下来，用右键菜单「窗口 → 保存窗口大小和位置」。
-panel_width = 578
-panel_height = 287
+panel_width = 512
+panel_height = 256
 min_panel_width = 320      # 拖动缩放时的最小尺寸
 min_panel_height = 120
 corner_radius = 14
