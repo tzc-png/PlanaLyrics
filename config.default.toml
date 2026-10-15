@@ -43,6 +43,8 @@ karaoke = true             # 当前句按时间从左到右“唱到哪亮到哪
 unsung_opacity = 0.35      # 还没唱到的部分的亮度（相对已唱部分），0 = 完全看不见
 karaoke_tail = 0.88        # 扫描在“距下一句还有多少比例”时结束：1 = 一直扫到下一句
 karaoke_max_ms = 6000      # 单句扫描的最长毫秒数，间隔很长时不会慢慢扫一整天
+karaoke_lift = 4           # 已唱到的字比未唱的高出多少像素；0 = 只变颜色不抬高
+karaoke_lift_span = 1.4    # 抬起一个字要花几个字的宽度：1=就在这个字内抬完，越大相邻的字越会被带着动
 font_family = "Noto Sans CJK SC"
 font_weight = "black"      # thin/light/normal/medium/semibold/bold/heavy/black
 font_lyrics = 34           # 当前句字号（前后句按 context_scale 缩小）

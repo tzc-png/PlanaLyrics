@@ -66,6 +66,8 @@ class WindowConfig:
     unsung_opacity: float = 0.35
     karaoke_tail: float = 0.88
     karaoke_max_ms: int = 6000
+    karaoke_lift: int = 4
+    karaoke_lift_span: float = 1.4
     font_family: str = "Noto Sans CJK SC"
     font_weight: str = "black"
     font_lyrics: int = 34
@@ -195,7 +197,7 @@ def save_values(changes: dict[str, dict[str, object]], path: Path = CONFIG_PATH)
         if not leftover:
             continue
         at = insert_at.get(section, len(lines))
-        lines[at:at] = [f"{key} = {_toml(value)}" for key, value in leftover.items()]
+        lines[at:at] = [_documented_line(section, key, value) for key, value in leftover.items()]
 
     try:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -240,6 +242,26 @@ def _reline(raw: str, value: object) -> str:
     if comment is None:
         return left
     return left + " " * max(1, column - len(left)) + comment
+
+
+def _documented_line(section: str, key: str, value: object) -> str:
+    """The line to append for a setting the settings file does not mention yet.
+
+    Taken from the defaults file when it has the setting, so a new one arrives
+    with the same comment that explains it there rather than bare.
+    """
+    try:
+        text = DEFAULTS_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return f"{key} = {_toml(value)}"
+    current = ""
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current = stripped[1:-1].strip()
+        elif current == section and stripped.split("=")[0].strip() == key:
+            return _reline(raw, value)
+    return f"{key} = {_toml(value)}"
 
 
 def _split_setting(raw: str) -> tuple[str, str | None, int]:

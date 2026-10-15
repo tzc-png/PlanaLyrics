@@ -1170,42 +1170,70 @@ class Overlay:
                 continue
             top = layout.index_to_pos(line.get_start_index()).y / Pango.SCALE
             left = (wrap - logical.width) / 2.0
-            lines.append((left, top, float(logical.width), float(logical.height)))
+            # where each character starts, so the sweep can be told which one it
+            # is inside: the karaoke lift moves a character whole
+            start, length = line.get_start_index(), line.get_length()
+            bounds = sorted(
+                {layout.index_to_pos(index).x / Pango.SCALE for index in range(start, start + length)}
+            )
+            bounds.append(left + logical.width)
+            lines.append((left, top, float(logical.width), float(logical.height), bounds))
         return lines
 
-    def _wipe_rects(self, lines, pad: int, factor: float, progress: float, sung: bool):
-        """Clip rectangles for the sung (or not yet sung) part of the row.
+    def _wipe_rects(self, lines, pad: int, factor: float, progress: float,
+                    lift: float = 0.0, span: float = 1.0):
+        """What to draw for a row being sung: ``(rect, sung, raise)`` each.
 
         A line that wrapped is swept row by row, each row taking a share of the
         sweep in proportion to its width, so the sweep continues on the second row
         instead of the whole lower half lighting up at once.
+
+        The colour is a continuous sweep; the lift follows it as closely as it can
+        while still moving a character as a whole. Each character rises over the
+        span of the sweep that passes through it -- see ``_lift_runs`` -- so the
+        raise travels along the line rather than switching on character by
+        character, and a character the sweep is inside is neither left split in
+        two nor lifted ahead of its turn.
+
+        A raised rectangle is grown upwards by its own raise, or the raised tops
+        of the characters would be cut off by their own clip.
         """
         total = sum(line[2] for line in lines)
         if total <= 0:
             return []
-        rects = []
+        out: list[tuple] = []
         done = 0.0
-        for left, top, width, height in lines:
+        for left, top, width, height, bounds in lines:
             share = width / total
             begin = done / total
             done += width
             local = 1.0 if share <= 0 else (progress - begin) / share
             local = max(0.0, min(1.0, local))
-            if (sung and local <= 0.0) or (not sung and local >= 1.0):
-                continue
+            right = left + width
             edge = left + local * width
-            x0, x1 = (left, edge) if sung else (edge, left + width)
-            if x1 - x0 <= 0.0:
-                continue
-            rects.append(
-                (
-                    (pad + x0) * factor,
-                    (pad + top) * factor,
-                    (x1 - x0) * factor,
-                    height * factor,
-                )
-            )
-        return rects
+            top_px = (pad + top) * factor
+            height_px = height * factor
+
+            for x0, x1, raised in _lift_runs(bounds, edge, lift, span):
+                if x1 - x0 <= 0.0:
+                    continue
+                for piece0, piece1, sung in (
+                    (x0, min(x1, edge), True),
+                    (max(x0, edge), x1, False),
+                ):
+                    if piece1 - piece0 <= 0.0:
+                        continue
+                    out.append((
+                        (
+                            (pad + piece0) * factor,
+                            top_px - raised,
+                            (piece1 - piece0) * factor,
+                            height_px + raised,
+                        ),
+                        sung,
+                        raised,
+                    ))
+        return out
 
     def _draw_row(self, ctx, row: VisualRow) -> None:
         settings = self.config.window
@@ -1266,17 +1294,25 @@ class Overlay:
         # The same mask twice, each side of the sweep clipped away in turn: the
         # edge falls wherever the progress is, so a character it lands inside is
         # lit on one side and dim on the other.
-        for sung, alpha in ((False, row.alpha * shade), (True, row.alpha)):
-            rects = self._wipe_rects(lines, pad, factor, progress, sung)
-            if not rects:
-                continue
+        # What has been sung rides a little above what has not, so the sweep reads
+        # as the line lifting as it goes rather than only changing colour. Each
+        # piece is clipped first and the mask then drawn from higher up, which
+        # keeps them meeting at the same vertical edge. The lift is scaled by how
+        # crisp the row is, so a line sinking into the background as it is left
+        # behind puts its raised characters down smoothly instead of dropping them.
+        lift = max(0, float(settings.karaoke_lift)) * self.font_scale() * row.sharp
+        span = max(0.2, float(settings.karaoke_lift_span))
+        for piece, sung, raised in self._wipe_rects(lines, pad, factor, progress, lift, span):
             ctx.save()
             ctx.translate(x, y)
             ctx.new_path()
-            for rx, ry, rw, rh in rects:
-                ctx.rectangle(rx, ry, rw, rh)
+            ctx.rectangle(*piece)
             ctx.clip()
-            ctx.set_source_rgba(*_tint(colour, alpha))
+            if raised:
+                ctx.translate(0, -raised)
+            ctx.set_source_rgba(
+                *_tint(colour, row.alpha if sung else row.alpha * shade)
+            )
             ctx.mask(pattern)
             ctx.restore()
 
@@ -1290,6 +1326,32 @@ class Overlay:
         alpha = max(0.0, min(1.0, self.config.window.halo_alpha))
         alpha *= HALO_FADE_FLOOR + (1.0 - HALO_FADE_FLOOR) * max(0.0, min(1.0, fade))
         return red, green, blue, alpha
+
+
+def _lift_runs(bounds: list[float], edge: float, lift: float, span: float):
+    """``(x0, x1, raise)`` runs across one visual line's characters.
+
+    Each character rises as a unit, by however far the sweep has travelled
+    through it: nothing while the sweep is still short of it, all of it once the
+    sweep is past, and a smoothstep in between. That is what keeps a character
+    from being cut in half by the sweep while still arriving gradually.
+
+    ``span`` is how many character widths the rise takes, so a wider one starts
+    a character moving before the sweep reaches it and carries on past it, and
+    several characters end up in motion together. Runs at the same height are
+    merged, which leaves the flat parts of the line as single rectangles.
+    """
+    runs: list[list[float]] = []
+    for index in range(len(bounds) - 1):
+        start, end = bounds[index], bounds[index + 1]
+        step = max(1.0, end - start) * max(0.2, span)
+        progress = max(0.0, min(1.0, (edge - start) / step))
+        raise_ = round(lift * progress * progress * (3.0 - 2.0 * progress) * 4.0) / 4.0
+        if runs and abs(runs[-1][2] - raise_) < 0.13:
+            runs[-1][1] = end
+        else:
+            runs.append([start, end, raise_])
+    return [(x0, x1, raise_) for x0, x1, raise_ in runs]
 
 
 def _box_blur(values: np.ndarray, radius: int, axis: int) -> np.ndarray:
