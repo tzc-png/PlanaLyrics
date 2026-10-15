@@ -43,9 +43,11 @@ WAITING = "等待 MyUne Music…"
 # translation font each move in proportion to their own size, and an integer step
 # up is exactly undone by the same step down.
 FONT_SCALE_STEP = 6
-# the lowest font_scale the menu will reach: below it the lyric font falls under
-# 12px or the translation under 8px
+# the lowest and highest font_scale the menu will move within: at the floor the
+# lyric font is 12px and the translation 8px (the smallest worth showing); at the
+# ceiling they are 56px and 38px. The ceiling mirrors the floor around 100.
 FONT_SCALE_FLOOR = 34
+FONT_SCALE_CEILING = 166
 
 
 class App:
@@ -249,10 +251,17 @@ class App:
         translation fonts are drawn at, so the two fonts move in proportion to
         their own sizes. An integer step on the scale is exactly undone by the
         same step in the other direction.
+
+        A step is only refused when it would carry the scale past the end it is
+        heading for, so a value hand-edited out of range can still be walked back
+        in.
         """
         window = self.config.window
-        scale = window.font_scale + (FONT_SCALE_STEP if direction > 0 else -FONT_SCALE_STEP)
-        if scale < FONT_SCALE_FLOOR:
+        step = FONT_SCALE_STEP if direction > 0 else -FONT_SCALE_STEP
+        scale = window.font_scale + step
+        if step > 0 and scale > FONT_SCALE_CEILING:
+            return
+        if step < 0 and scale < FONT_SCALE_FLOOR:
             return
         window.font_scale = scale
         config_mod.save_values({"window": {"font_scale": scale}})
@@ -261,8 +270,12 @@ class App:
         translation = int(round(window.font_translation * scale / 100))
         print(f"PlanaLyrics: 字号 {lyrics}/{translation}")
 
+    def font_can_grow(self) -> bool:
+        """Whether one more step up stays at or below the ceiling."""
+        return self.config.window.font_scale + FONT_SCALE_STEP <= FONT_SCALE_CEILING
+
     def font_can_shrink(self) -> bool:
-        """Whether one more step down keeps the fonts above their floors."""
+        """Whether one more step down stays at or above the floor."""
         return self.config.window.font_scale - FONT_SCALE_STEP >= FONT_SCALE_FLOOR
 
     # -- MPRIS events ----------------------------------------------------

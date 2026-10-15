@@ -666,7 +666,8 @@ class Overlay:
 
         menu.append(Gtk.SeparatorMenuItem())
         heading("窗口")
-        action("增大字号", lambda: self.app.adjust_font(+1))
+        grow = action("增大字号", lambda: self.app.adjust_font(+1))
+        grow.set_sensitive(self.app.font_can_grow())
         shrink = action("减小字号", lambda: self.app.adjust_font(-1))
         shrink.set_sensitive(self.app.font_can_shrink())
         action("保存窗口大小和位置", self.app.save_window_geometry)

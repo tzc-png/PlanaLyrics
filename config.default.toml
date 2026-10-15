@@ -50,7 +50,7 @@ font_family = "Noto Sans CJK SC"
 font_weight = "black"      # thin/light/normal/medium/semibold/bold/heavy/black
 font_lyrics = 34           # 当前句字号（font_scale=100 时；前后句按 context_scale 缩小）
 font_translation = 23      # 译文行（font_scale=100 时）
-font_scale = 100           # 字号缩放百分比：右键菜单「窗口 → 增大/减小字号」改这个
+font_scale = 100           # 字号缩放百分比（34~166）：右键菜单「窗口 → 增大/减小字号」改这个
 line_spacing = 24          # 相邻两句之间的间距
 inner_spacing = 3          # 一句歌词与它自己的译文之间的间距
 padding = 28               # 文字与面板左右边缘的距离
