@@ -1013,6 +1013,13 @@ class Overlay:
         if not self._theme_ready:
             self._theme_ready = True
             self._theme_target = self._theme_mix = target
+            # The first decision is applied whole, with no fade to repaint for it,
+            # so it has to ask for a frame of its own -- otherwise the panel keeps
+            # the colour it was first drawn with. Nothing else redraws when there
+            # are no lyrics to sweep, so the notice for a song with no lyric stayed
+            # white on a light background until something happened to trigger a
+            # repaint.
+            self.area.queue_draw()
             return
         if target == self._theme_target:
             return
