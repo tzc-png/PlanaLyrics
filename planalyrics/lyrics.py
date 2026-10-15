@@ -32,8 +32,23 @@ _CREDIT_RE = re.compile(
     re.IGNORECASE,
 )
 _CJK_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿ｦ-ﾟ]")
-_KANA_RE = re.compile(r"[ぁ-ゖァ-ヺー]")
 _HAN_RE = re.compile(r"[㐀-䶿一-鿿]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+# Scripts that are neither Chinese nor Latin: Japanese, Korean, and the rest of
+# the non-Latin world. A song written in one of these is what gets a Chinese row.
+_FOREIGN_RE = re.compile(
+    "["
+    "Ͱ-Ͽ"      # Greek
+    "Ѐ-ԯ"      # Cyrillic
+    "԰-֏"      # Armenian
+    "֐-׿"      # Hebrew
+    "؀-ۿ"      # Arabic
+    "ऀ-ॿ"      # Devanagari
+    "฀-๿"      # Thai
+    "぀-ヿ"      # kana
+    "ᄀ-ᇿ㄰-㆏가-힣"   # Hangul
+    "]"
+)
 
 _BOMS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -71,12 +86,13 @@ class Lyrics:
 
     @property
     def wants_translation(self) -> bool:
-        """Only Japanese originals get a translation row.
+        """A Chinese row goes with any song that is neither Chinese nor English.
 
-        English and Chinese lyrics are shown on their own; a Chinese
-        translation is only useful next to the Japanese it translates.
+        Japanese, Korean and every other language are foreign enough that a
+        Chinese translation is worth showing; Chinese needs no translation of
+        itself, and English is not what this setting is for.
         """
-        return self.script == "ja"
+        return self.script == "other"
 
     def index_at(self, t_ms: int) -> int:
         """Index of the line playing at ``t_ms``, or -1 before the first one."""
@@ -87,12 +103,26 @@ class Lyrics:
 
 
 def detect_script(lines: list[Line]) -> str:
+    """Which of the three kinds of song this is: ``zh``, ``en`` or ``other``.
+
+    Only one distinction is really being made -- Chinese and English lyrics stand
+    on their own, everything else is shown with a Chinese row -- so the point is
+    to tell those two from the rest, not from each other. Latin script counts as
+    English, which is what nearly every Latin-script song in a collection like
+    this is; Japanese, Korean and the other non-Latin scripts are ``other``.
+    """
     text = "".join(line.text for line in lines)
-    kana = len(_KANA_RE.findall(text))
     han = len(_HAN_RE.findall(text))
-    if kana and kana >= max(3, 0.1 * han):
-        return "ja"
-    return "zh" if han else "latin"
+    foreign = len(_FOREIGN_RE.findall(text))
+    # A couple of foreign characters inside otherwise Chinese text -- a stray
+    # katakana lengthener, say -- are not enough to call the whole song foreign.
+    if foreign >= max(2, 0.1 * han):
+        return "other"
+    if han:
+        return "zh"
+    if _LATIN_RE.search(text):
+        return "en"
+    return "other"
 
 
 def decode_bytes(data: bytes) -> tuple[str, str]:

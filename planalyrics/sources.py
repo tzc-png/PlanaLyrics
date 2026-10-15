@@ -56,8 +56,9 @@ def resolve(
     changes what is on screen rather than appearing not to have taken.
 
     ``search_translation`` decides where a Chinese line may come from. Left on, a
-    Japanese song whose own lyrics carry no Chinese borrows one from a match;
-    turned off, the only Chinese shown is the Chinese that came with the lyrics.
+    foreign-language song (Japanese, Korean, ...) whose own lyrics carry no
+    Chinese borrows one from a match; turned off, the only Chinese shown is the
+    Chinese that came with the lyrics.
     """
     chosen: Lyrics | None = None
     stub: Lyrics | None = None
@@ -110,7 +111,7 @@ def _from_player(text: str | None) -> Lyrics | None:
 
 
 def _add_translation(parsed: Lyrics, track: Track, cache_dir: Path) -> None:
-    """Give a Japanese original the Chinese it does not carry itself.
+    """Give a foreign-language original the Chinese it does not carry itself.
 
     The saved result is consulted before the network so a song is only looked up
     once. Timestamps rarely agree to the millisecond across sources, so

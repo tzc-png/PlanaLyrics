@@ -655,7 +655,7 @@ class Overlay:
         heading("歌词")
         menu.append(self._build_player_menu())
         action("重新搜索歌词", self.app.research)
-        toggle("显示翻译（日语歌）", "window", "show_translation")
+        toggle("显示翻译（外语歌）", "window", "show_translation")
         toggle("联网搜索歌词", "lyrics", "online_enabled")
         toggle("联网搜索中文译文", "lyrics", "search_translation")
 
