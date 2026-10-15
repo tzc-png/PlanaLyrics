@@ -111,12 +111,24 @@ class App:
         self.config = config_mod.load()
         self.overlay.apply_config(self.config)
         self.overlay.force_redraw()
+        # the lyrics settings decide which sources apply, so they take effect the
+        # same way the rest of the file does
+        self.reload_lyrics()
         if notify:
             print("PlanaLyrics: 配置已重载")
 
     def research(self) -> None:
         if self.track is not None:
             self._start_lookup(self.track, use_cache=False)
+
+    def reload_lyrics(self) -> None:
+        """Re-resolve the current track, reusing what is already known.
+
+        For a setting that changes which sources apply rather than asking for a
+        fresh answer from the network.
+        """
+        if self.track is not None:
+            self._start_lookup(self.track)
 
     def adjust_offset(self, delta_ms: int | None) -> None:
         self.config.lyrics.offset_ms = 0 if delta_ms is None else self.config.lyrics.offset_ms + delta_ms
@@ -185,6 +197,7 @@ class App:
                 allow_online=self.config.lyrics.online_enabled,
                 use_cache=use_cache,
                 preferred_text=self.players.lyric_text(),
+                search_translation=self.config.lyrics.search_translation,
             )
         except Exception as exc:  # a failed lookup must not kill the overlay
             print(f"PlanaLyrics: 查找歌词失败 ({exc})")
@@ -242,8 +255,11 @@ class App:
             elapsed_us = 0
             if self.playing:
                 elapsed_us = int((time.monotonic() - self.anchor_time) * 1_000_000)
-            t_ms = (self.anchor_us + elapsed_us) // 1000 + self.config.lyrics.offset_ms
+            t_ms = (self.anchor_us + elapsed_us) / 1000.0 + self.config.lyrics.offset_ms
             self.overlay.set_index(self.lyrics.index_at(int(t_ms)))
+            # hand the overlay the clock as well as the line: it reads it forward
+            # between ticks so the karaoke sweep moves at frame rate
+            self.overlay.set_position(t_ms, self.playing)
         return True
 
 

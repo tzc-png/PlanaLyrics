@@ -132,11 +132,22 @@ def parse_with_translation(lrc_text: str, tlrc_text: str = "") -> Lyrics:
 
 
 def _translation_map(text: str) -> dict[int, str]:
-    return {
-        t_ms: value.strip()
-        for t_ms, value in _timed_entries(text)[0]
-        if value.strip()
-    }
+    """One translation per timestamp, preferring the one that translates.
+
+    A source can carry several translations of the same lines -- a file holding
+    both Chinese and a romanisation, or a player handing over both -- and they
+    share the original's timestamps. A romanisation is not a translation, so
+    where the two collide the Chinese line is the one to keep.
+    """
+    out: dict[int, str] = {}
+    for t_ms, value in _timed_entries(text)[0]:
+        value = value.strip()
+        if not value:
+            continue
+        current = out.get(t_ms)
+        if current is None or (_HAN_RE.search(value) and not _HAN_RE.search(current)):
+            out[t_ms] = value
+    return out
 
 
 def _build(
@@ -157,18 +168,46 @@ def _build(
     return Lyrics(lines=lines, synced=True, offset_ms=offset)
 
 
-def _split_stamps(line: str) -> tuple[list[int], str]:
+def _stamp_ms(match: re.Match) -> int:
+    fraction = match.group(3)
+    millis = int(fraction.ljust(3, "0")) if fraction else 0
+    return int(match.group(1)) * 60_000 + int(match.group(2)) * 1_000 + millis
+
+
+def _segments(line: str) -> list[tuple[list[int], str]]:
+    """``(timestamps, text)`` groups on one line.
+
+    Timestamps normally sit at the front and the text follows. One can also turn
+    up after text: two blocks written without a newline between them do exactly
+    that, and stopping at the first stamp would swallow the whole following block
+    into this line's text.
+    """
+    groups: list[tuple[list[int], str]] = []
     times: list[int] = []
-    pos = 0
-    while True:
-        match = _TS_RE.match(line, pos)
-        if not match:
-            break
-        fraction = match.group(3)
-        millis = int(fraction.ljust(3, "0")) if fraction else 0
-        times.append(int(match.group(1)) * 60_000 + int(match.group(2)) * 1_000 + millis)
-        pos = match.end()
-    return times, line[pos:]
+    start = None
+    for match in _TS_RE.finditer(line):
+        if start is not None:
+            between = line[start : match.start()]
+            # stamps with nothing between them all belong to the text that
+            # follows them, which is how a repeated line is written
+            if between.strip():
+                groups.append((times, between))
+                times = []
+        times.append(_stamp_ms(match))
+        start = match.end()
+    if times:
+        groups.append((times, line[start:]))
+    return groups
+
+
+def _clean(text: str) -> str:
+    """Drop the tail of a line once the tag's bytes stopped decoding.
+
+    U+FFFD is a byte the decoder could not read, which in practice means the
+    field was assembled from pieces and the seam landed inside a character.
+    Whatever follows is the next block's business, not this line's text.
+    """
+    return text.split("\ufffd", 1)[0].strip()
 
 
 def _timed_entries(text: str) -> tuple[list[tuple[int, str]], list[str], int]:
@@ -179,9 +218,17 @@ def _timed_entries(text: str) -> tuple[list[tuple[int, str]], list[str], int]:
         line = raw.strip()
         if not line:
             continue
-        times, rest = _split_stamps(line)
-        if times:
-            rest = rest.strip()
+        groups = _segments(line)
+        if not groups:
+            meta = _META_RE.match(line)
+            if meta:
+                if meta.group(1).lower() == "offset":
+                    offset = _to_int(meta.group(2), offset)
+                continue
+            unstamped.append(_clean(line))
+            continue
+        for times, rest in groups:
+            rest = _clean(rest)
             if rest:
                 meta = _META_RE.match(rest)
                 if meta:
@@ -190,13 +237,6 @@ def _timed_entries(text: str) -> tuple[list[tuple[int, str]], list[str], int]:
                     continue
             for t_ms in times:
                 entries.append((t_ms, rest))
-            continue
-        meta = _META_RE.match(line)
-        if meta:
-            if meta.group(1).lower() == "offset":
-                offset = _to_int(meta.group(2), offset)
-            continue
-        unstamped.append(line)
     return entries, unstamped, offset
 
 

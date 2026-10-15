@@ -41,64 +41,85 @@ def resolve(
     allow_online: bool = True,
     use_cache: bool = True,
     preferred_text: str | None = None,
+    search_translation: bool = True,
 ) -> Lyrics | None:
     """First source with a usable lyric wins.
 
     The audio file's own lyrics come first (the user's own data), then the lyric
     the player itself is displaying -- which matches that player's clock exactly
-    -- then the cache, then the network. ``use_cache`` is cleared for a manual
-    re-search, which should query the network rather than replay a cached answer.
+    -- then a saved result, then the network. ``use_cache`` is cleared for a
+    manual re-search, which should query the network rather than replay a cached
+    answer.
+
+    ``search_translation`` decides where a Chinese line may come from. Left on, a
+    Japanese song whose own lyrics carry no Chinese borrows one from a match;
+    turned off, the only Chinese shown is the Chinese that came with the lyrics.
     """
-    candidates = [
+    chosen: Lyrics | None = None
+    stub: Lyrics | None = None
+    for lyrics in (
         _from_sidecar(audio_path),
         _from_embedded(audio_path),
-        _from_player(preferred_text, track, allow_online),
-    ]
-    if use_cache:
-        candidates.append(_from_cache(track, cache_dir))
-
-    stub: Lyrics | None = None
-    for lyrics in candidates:
+        _from_player(preferred_text),
+    ):
         if lyrics is None or not lyrics.lines:
             continue
         if len(lyrics.lines) >= MIN_USEFUL_LINES or _is_instrumental_notice(lyrics):
-            return lyrics
+            chosen = lyrics
+            break
         stub = stub or lyrics
 
-    online = _from_online(track, cache_dir) if allow_online else None
-    return online or stub
+    if chosen is not None:
+        if search_translation:
+            _add_translation(chosen, track, cache_dir, allow_online)
+        return chosen
+
+    # nothing of the listener's own: a saved result, then the network. Either way
+    # the lyric arrived carrying its translation, so switching the search off
+    # takes the translation back out rather than leaving it to be looked up.
+    fetched = _from_cache(track, cache_dir) if use_cache else None
+    if fetched is None and allow_online:
+        fetched = _from_online(track, cache_dir)
+    if fetched is None:
+        return stub
+    if not search_translation:
+        _drop_translations(fetched)
+    return fetched
 
 
 def _is_instrumental_notice(lyrics: Lyrics) -> bool:
     return any(INSTRUMENTAL_RE.search(line.text) for line in lyrics.lines)
 
 
-def _from_player(text: str | None, track: Track, allow_online: bool) -> Lyrics | None:
+def _from_player(text: str | None) -> Lyrics | None:
     if not text or not text.strip():
         return None
     parsed = lrc.parse(text)
     if not parsed.lines:
         return None
     parsed.source = "播放器自带歌词"
-    if allow_online and parsed.wants_translation and not any(line.translation for line in parsed.lines):
-        _borrow_translations(parsed, track)
     return parsed
 
 
-def _borrow_translations(parsed: Lyrics, track: Track) -> None:
-    """The player supplied originals only; take the translation from a match.
+def _add_translation(parsed: Lyrics, track: Track, cache_dir: Path, allow_online: bool) -> None:
+    """Give a Japanese original the Chinese it does not carry itself.
 
-    Timestamps rarely agree to the millisecond across sources, so translations
-    are matched to the nearest line rather than by exact time.
+    The saved result is consulted before the network so a song is only looked up
+    once. Timestamps rarely agree to the millisecond across sources, so
+    translations are matched to the nearest line rather than by exact time.
     """
-    result = net.lookup(track)
-    if result is None:
+    if not parsed.wants_translation or any(line.translation for line in parsed.lines):
         return
-    original, translation, _label = result
-    if not translation.strip():
-        return
-    other = lrc.parse_with_translation(original, translation)
-    _map_translations(parsed, other.lines)
+    other = _from_cache(track, cache_dir)
+    if other is None and allow_online:
+        other = _from_online(track, cache_dir)
+    if other is not None:
+        _map_translations(parsed, other.lines)
+
+
+def _drop_translations(parsed: Lyrics) -> None:
+    for line in parsed.lines:
+        line.translation = None
 
 
 def _map_translations(target: Lyrics, source: list, tolerance_ms: int = 400) -> None:

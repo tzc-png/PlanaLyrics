@@ -56,6 +56,10 @@ context_lines = 1          # 当前句前后各显示几句
 context_opacity = 0.5     # 前后那几句的不透明度
 context_scale = 0.75       # 前后那几句的字号比例（切句时会平滑放大/缩小）
 blur_px = 5                # 前后那几句的模糊半径（像素），0 = 不模糊
+karaoke = true             # 当前句按时间从左到右“唱到哪亮到哪”
+unsung_opacity = 0.35      # 还没唱到的部分的亮度（相对已唱部分），0 = 完全看不见
+karaoke_tail = 0.88        # 扫描在“距下一句还有多少比例”时结束：1 = 一直扫到下一句
+karaoke_max_ms = 6000      # 单句扫描的最长毫秒数，间隔很长时不会慢慢扫一整天
 font_family = "Noto Sans CJK SC"
 font_weight = "black"      # thin/light/normal/medium/semibold/bold/heavy/black
 font_lyrics = 34           # 当前句字号（前后句按 context_scale 缩小）
@@ -88,6 +92,7 @@ click_through = false      # true = 鼠标穿透窗口（不能拖动）
 music_dirs = []            # 本地音乐目录，用于在播放器不给文件路径时反查
 cache_dir = ""
 online_enabled = true      # 本地找不到时就联网搜索
+search_translation = true  # 日语歌自己不带中文时，联网补一条中文译文
 offset_ms = 0              # 歌词整体微调，负数=提前
 """
 
@@ -119,6 +124,10 @@ class WindowConfig:
     context_opacity: float = 0.5
     context_scale: float = 0.75
     blur_px: int = 5
+    karaoke: bool = True
+    unsung_opacity: float = 0.35
+    karaoke_tail: float = 0.88
+    karaoke_max_ms: int = 6000
     font_family: str = "Noto Sans CJK SC"
     font_weight: str = "black"
     font_lyrics: int = 34
@@ -150,6 +159,7 @@ class LyricsConfig:
     music_dirs: list[str] = field(default_factory=list)
     cache_dir: str = ""
     online_enabled: bool = True
+    search_translation: bool = True
     offset_ms: int = 0
 
     @property

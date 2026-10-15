@@ -66,6 +66,14 @@ BACKGROUND_SAMPLE_BAND = 6
 # the light/dark text colour fades between the two schemes rather than flipping
 THEME_FADE_MS = 700
 THEME_FRAME_MS = 16
+# Karaoke wipe: the current line lights up left to right over its own span. How
+# much of the interval between two lines is swept, and the cap that keeps a long
+# instrumental break from crawling across the line, are both configurable.
+KARAOKE_DEFAULT_MS = 4000.0
+KARAOKE_FRAME_MS = 16
+# Only redraw once the edge has moved this far along the line -- about a fifth of
+# a pixel on a full-width one, so the sweep is smooth without a frame per tick.
+WIPE_EPSILON = 0.0015
 
 
 @dataclass
@@ -139,6 +147,14 @@ class Overlay:
         self._anim_start = 0.0
         self._anim_duration = 0.0
         self._anim_timer = 0
+        # playback clock: the app hands over an interpolated position every tick,
+        # and the karaoke sweep reads it forward between ticks so the wipe moves
+        # at frame rate instead of stepping in 100 ms jumps
+        self._clock_ms = 0.0
+        self._clock_at = time.monotonic()
+        self._clock_playing = False
+        self._karaoke_timer = 0
+        self._wipe_drawn = -1.0
         self._build_window()
 
     # -- window setup ----------------------------------------------------
@@ -251,7 +267,25 @@ class Overlay:
         if index != self.index:
             previous = self._draw_rows()
             self.index = index
+            self._wipe_drawn = -1.0
             self._animate_from(previous, index)
+            self._sync_karaoke_timer()
+
+    def set_position(self, t_ms: float, playing: bool) -> None:
+        """Adopt the app's playback position as an anchor for the sweep.
+
+        The app already interpolates between the player's position reports; this
+        just lets the overlay keep reading that clock forward at frame rate, so
+        the wipe does not advance in 100 ms steps.
+        """
+        was = self._clock_ms
+        self._clock_ms = float(t_ms)
+        self._clock_at = time.monotonic()
+        self._clock_playing = bool(playing)
+        self._sync_karaoke_timer()
+        if not playing and abs(float(t_ms) - was) > 1.0:
+            # a paused seek still needs one repaint to catch the sweep up
+            self.area.queue_draw()
 
     def force_redraw(self) -> None:
         self._snap()
@@ -279,6 +313,7 @@ class Overlay:
         self._from_rows = None
         self._to_rows = []
         self._progress = 1.0
+        self._sync_karaoke_timer()
         self.area.queue_draw()
 
     def _cancel_animation(self) -> None:
@@ -313,6 +348,80 @@ class Overlay:
             self.area.queue_draw()
             return False
         return True
+
+    # -- karaoke sweep ---------------------------------------------------
+
+    def _sync_karaoke_timer(self) -> None:
+        """Run the sweep clock only while there is something to sweep.
+
+        Paused -- or with no synced lyrics to time a sweep against -- the timer
+        stops, so an idle panel does no work at all.
+        """
+        want = self._clock_playing and self._wipe_span() is not None
+        if want and not self._karaoke_timer:
+            self._karaoke_timer = GLib.timeout_add(KARAOKE_FRAME_MS, self._karaoke_frame)
+        elif not want and self._karaoke_timer:
+            GLib.source_remove(self._karaoke_timer)
+            self._karaoke_timer = 0
+
+    def _karaoke_frame(self) -> bool:
+        progress = self._wipe_now()
+        if progress is not None and abs(progress - self._wipe_drawn) > WIPE_EPSILON:
+            self._wipe_drawn = progress
+            self.area.queue_draw()
+        return True
+
+    def _clock_now(self) -> float:
+        """Playback time in ms, read forward from the last anchor."""
+        if not self._clock_playing:
+            return self._clock_ms
+        return self._clock_ms + (time.monotonic() - self._clock_at) * 1000.0
+
+    def _wipe_span(self) -> tuple[float, float] | None:
+        """``(start_ms, sweep_ms)`` for the line being sung, or None.
+
+        A line owns the whole interval up to the next timestamp, but the voice
+        generally stops before then, so only part of it is swept; long intervals
+        (an instrumental break) are capped rather than crawled.
+        """
+        window, lyrics, index = self.config.window, self.lyrics, self.index
+        if not window.karaoke or lyrics is None or not lyrics.synced:
+            return None
+        if index is None or not (0 <= index < len(lyrics.lines)):
+            return None
+        start = float(lyrics.lines[index].t_ms)
+        if index + 1 < len(lyrics.lines):
+            span = float(lyrics.lines[index + 1].t_ms) - start
+        else:
+            span = KARAOKE_DEFAULT_MS
+        if span <= 0:
+            span = KARAOKE_DEFAULT_MS
+        tail = max(0.05, min(1.0, float(window.karaoke_tail)))
+        cap = max(200.0, float(window.karaoke_max_ms))
+        return start, max(150.0, min(span * tail, cap))
+
+    def _wipe_now(self) -> float | None:
+        span = self._wipe_span()
+        if span is None:
+            return None
+        start, sweep = span
+        return max(0.0, min(1.0, (self._clock_now() - start) / sweep))
+
+    def _row_wipe(self, row: VisualRow) -> tuple[float, bool] | None:
+        """How much of ``row`` has been sung: ``(progress, sweeps)``, else None.
+
+        Only the line being sung has a sweep. Its translation does not: the
+        translation is not what is being sung, so it simply stays dim until the
+        line is through. Every other row -- the neighbours, the waiting message --
+        is left alone.
+        """
+        prefix, _, index = row.key.partition("\x00")
+        if prefix not in ("line", "translation") or index != str(self.index):
+            return None
+        progress = self._wipe_now()
+        if progress is None:
+            return None
+        return progress, prefix == "line"
 
     # -- background sampling ---------------------------------------------
 
@@ -510,14 +619,16 @@ class Overlay:
         menu.append(Gtk.SeparatorMenuItem())
         menu.append(self._build_player_menu())
         menu.append(Gtk.SeparatorMenuItem())
-        for label, attribute in (
-            ("显示翻译", "show_translation"),
-            ("跟随壁纸明暗", "adapt_to_background"),
-            ("鼠标穿透（不可拖动）", "click_through"),
+        for label, section, attribute in (
+            ("显示翻译", "window", "show_translation"),
+            ("联网搜索中文译文", "lyrics", "search_translation"),
+            ("逐字进度（唱到哪亮到哪）", "window", "karaoke"),
+            ("跟随壁纸明暗", "window", "adapt_to_background"),
+            ("鼠标穿透（不可拖动）", "window", "click_through"),
         ):
             check = Gtk.CheckMenuItem(label=label)
-            check.set_active(bool(getattr(self.config.window, attribute)))
-            check.connect("toggled", self._on_toggle, attribute)
+            check.set_active(bool(getattr(getattr(self.config, section), attribute)))
+            check.connect("toggled", self._on_toggle, section, attribute)
             menu.append(check)
 
         menu.show_all()
@@ -564,12 +675,15 @@ class Overlay:
         if entry.get_active():
             self.app.select_player(key)
 
-    def _on_toggle(self, item: Gtk.CheckMenuItem, attribute: str) -> None:
-        setattr(self.config.window, attribute, item.get_active())
+    def _on_toggle(self, item: Gtk.CheckMenuItem, section: str, attribute: str) -> None:
+        setattr(getattr(self.config, section), attribute, item.get_active())
         if attribute == "click_through":
             self._apply_click_through()
         if attribute == "adapt_to_background":
             self._sample_background()
+        if attribute == "search_translation":
+            # which Chinese is on screen changes, so the lyrics are resolved again
+            self.app.reload_lyrics()
         self._snap()
 
     # -- lyric layout ----------------------------------------------------
@@ -978,6 +1092,10 @@ class Overlay:
         then blitted scaled. That keeps the animated font size smooth while
         leaving cairo only two glyph sizes per line to rasterise, instead of a new
         sub-pixel size every frame.
+
+        Returned with the surface is the geometry of each wrapped visual line --
+        ``(left, top, width, height)`` in surface pixels. The karaoke sweep needs
+        it, and it is exactly what the cached rasterisation already knows.
         """
         key = (text, size)
         entry = self._text_cache.get(key)
@@ -993,7 +1111,7 @@ class Overlay:
         height = layout.get_pixel_size()[1]
         pad = max(0, int(self.config.window.halo_radius)) * 2 + 1
         if width < 1 or height < 1:
-            entry = (None, 0, 0, 0)
+            entry = (None, 0, 0, 0, [])
         else:
             surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width + 2 * pad, height + 2 * pad)
             ctx = cairo.Context(surface)
@@ -1001,19 +1119,73 @@ class Overlay:
             ctx.move_to(pad, pad)
             PangoCairo.show_layout(ctx, layout)
             surface.flush()
-            entry = (surface, width, height, pad)
+            entry = (surface, width, height, pad, self._visual_lines(layout, width))
 
         if len(self._text_cache) >= TEXT_CACHE_LIMIT:
             self._text_cache.clear()
         self._text_cache[key] = entry
         return entry
 
+    @staticmethod
+    def _visual_lines(layout: Pango.Layout, wrap: int) -> list[tuple[float, float, float, float]]:
+        """Where Pango will actually draw each wrapped line, in layout pixels.
+
+        Pango reports a line's extents relative to that line's own origin, so the
+        width is read from there while the offset is reconstructed: the layout is
+        centred, and its vertical position comes from the cursor rect of the
+        line's first character.
+        """
+        lines = []
+        for i in range(layout.get_line_count()):
+            line = layout.get_line(i)
+            _ink, logical = line.get_pixel_extents()
+            if logical.width <= 0:
+                continue
+            top = layout.index_to_pos(line.get_start_index()).y / Pango.SCALE
+            left = (wrap - logical.width) / 2.0
+            lines.append((left, top, float(logical.width), float(logical.height)))
+        return lines
+
+    def _wipe_rects(self, lines, pad: int, factor: float, progress: float, sung: bool):
+        """Clip rectangles for the sung (or not yet sung) part of the row.
+
+        A line that wrapped is swept row by row, each row taking a share of the
+        sweep in proportion to its width, so the sweep continues on the second row
+        instead of the whole lower half lighting up at once.
+        """
+        total = sum(line[2] for line in lines)
+        if total <= 0:
+            return []
+        rects = []
+        done = 0.0
+        for left, top, width, height in lines:
+            share = width / total
+            begin = done / total
+            done += width
+            local = 1.0 if share <= 0 else (progress - begin) / share
+            local = max(0.0, min(1.0, local))
+            if (sung and local <= 0.0) or (not sung and local >= 1.0):
+                continue
+            edge = left + local * width
+            x0, x1 = (left, edge) if sung else (edge, left + width)
+            if x1 - x0 <= 0.0:
+                continue
+            rects.append(
+                (
+                    (pad + x0) * factor,
+                    (pad + top) * factor,
+                    (x1 - x0) * factor,
+                    height * factor,
+                )
+            )
+        return rects
+
     def _draw_row(self, ctx, row: VisualRow) -> None:
         settings = self.config.window
         full_size = self._font(
             settings.font_translation if row.role == TRANSLATION else settings.font_lyrics
         )
-        surface, _width, _height, pad = self._text_surface(row.text, full_size)
+        surface, _width, _height, pad, lines = self._text_surface(row.text, full_size)
         if surface is None:
             return
 
@@ -1042,11 +1214,44 @@ class Overlay:
                     ctx.mask(pattern)
                     ctx.restore()
 
-        ctx.set_source_rgba(*_tint(self._color(row.role), row.alpha))
-        ctx.save()
-        ctx.translate(x, y)
-        ctx.mask(pattern)
-        ctx.restore()
+        wipe = self._row_wipe(row)
+        if wipe is None:
+            ctx.set_source_rgba(*_tint(self._color(row.role), row.alpha))
+            ctx.save()
+            ctx.translate(x, y)
+            ctx.mask(pattern)
+            ctx.restore()
+            return
+
+        progress, sweeps = wipe
+        shade = max(0.0, min(1.0, settings.unsung_opacity))
+        colour = self._color(row.role)
+        if not sweeps:
+            # the translation is not itself sung: it stays dim until the line is
+            # through rather than sweeping along with the words
+            ctx.set_source_rgba(*_tint(colour, row.alpha * (shade + (1 - shade) * progress)))
+            ctx.save()
+            ctx.translate(x, y)
+            ctx.mask(pattern)
+            ctx.restore()
+            return
+
+        # The same mask twice, each side of the sweep clipped away in turn: the
+        # edge falls wherever the progress is, so a character it lands inside is
+        # lit on one side and dim on the other.
+        for sung, alpha in ((False, row.alpha * shade), (True, row.alpha)):
+            rects = self._wipe_rects(lines, pad, factor, progress, sung)
+            if not rects:
+                continue
+            ctx.save()
+            ctx.translate(x, y)
+            ctx.new_path()
+            for rx, ry, rw, rh in rects:
+                ctx.rectangle(rx, ry, rw, rh)
+            ctx.clip()
+            ctx.set_source_rgba(*_tint(colour, alpha))
+            ctx.mask(pattern)
+            ctx.restore()
 
     def _halo_color(self, halo, fade: float):
         """The outline keeps most of its strength as a line fades.
