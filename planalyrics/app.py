@@ -165,7 +165,7 @@ class App:
         self.overlay.set_status(WAITING)
 
     def _on_state_changed(self, *_args) -> None:
-        self.playing = self.players.status == "Playing"
+        self._set_playing(self.players.status == "Playing")
         self._reanchor(self.players.position_us())
 
     def _on_track_changed(self, *_args) -> None:
@@ -228,18 +228,42 @@ class App:
             print(f"PlanaLyrics: {track.title} -> {lyrics.source or '内嵌'} ({len(lyrics.lines)} 行)")
         else:
             self.lyrics = None
-            where = path.name if path else "找不到本地文件"
-            self.overlay.set_status(f"{track.title}\n{track.artist}\n无歌词（{where}）")
-            print(f"PlanaLyrics: {track.title} 无歌词 ({where})")
+            if self.config.lyrics.online_enabled:
+                where = path.name if path else "找不到本地文件"
+                note = f"无歌词（{where}）"
+            else:
+                # saying which is missing matters when the search is off: nothing
+                # is going to turn up on its own
+                note = "本地无歌词（联网搜索已关闭）"
+            self.overlay.set_status(f"{track.title}\n{track.artist}\n{note}")
+            print(f"PlanaLyrics: {track.title} {note}")
         return False
 
     # -- timing ----------------------------------------------------------
 
-    def _estimate_us(self) -> int:
+    def _estimate_us(self, playing: bool | None = None) -> int:
         """Playback position interpolated from the last anchor."""
-        if not self.playing:
+        if playing is None:
+            playing = self.playing
+        if not playing:
             return self.anchor_us
         return self.anchor_us + int((time.monotonic() - self.anchor_time) * 1_000_000)
+
+    def _set_playing(self, playing: bool) -> None:
+        """Adopt the player's playing state, pinning the clock where it stands.
+
+        While playing, the position on screen has been interpolated forward from
+        the player's last report; that report is the same value, up to a poll
+        interval older. So when the player pauses it is the position on screen
+        that is right, and letting the report win instead drags the lyrics -- and
+        the karaoke sweep -- backwards on every pause, and then forwards again on
+        resume. Re-anchoring under the *old* state keeps whatever the clock had
+        reached, and restarts the interpolation from there.
+        """
+        was_playing = self.playing
+        if playing != was_playing:
+            self._reanchor(self._estimate_us(playing=was_playing), clamp=False)
+        self.playing = playing
 
     def _reanchor(self, position_us: int | None, clamp: bool = True) -> None:
         """Adopt the player's reported position, ignoring small backward steps.
@@ -261,17 +285,13 @@ class App:
 
     def _poll(self) -> bool:
         if self.players.connected:
-            was_playing = self.playing
-            self.playing = self.players.status == "Playing"
-            self._reanchor(self.players.position_us(), clamp=was_playing)
+            self._set_playing(self.players.status == "Playing")
+            self._reanchor(self.players.position_us())
         return True
 
     def _tick(self) -> bool:
         if self.lyrics is not None and self.lyrics.synced:
-            elapsed_us = 0
-            if self.playing:
-                elapsed_us = int((time.monotonic() - self.anchor_time) * 1_000_000)
-            t_ms = (self.anchor_us + elapsed_us) / 1000.0 + self.config.lyrics.offset_ms
+            t_ms = self._estimate_us() / 1000.0 + self.config.lyrics.offset_ms
             # Before the first timestamp there is no line to be on, so the first
             # one waits in the centre rather than sitting below an empty middle.
             # Its sweep starts from zero and does not move until its own moment

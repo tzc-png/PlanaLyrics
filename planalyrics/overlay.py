@@ -599,41 +599,56 @@ class Overlay:
         return False
 
     def _build_menu(self) -> None:
+        """The right-click menu, grouped by what each entry is about.
+
+        A section label is an entry that is there to be read rather than clicked,
+        so each group says what the settings under it have in common. Restoring
+        the defaults sits on its own at the end: it is the one entry that cannot
+        be undone from this menu.
+        """
         menu = Gtk.Menu()
-        for label, action in (
-            ("退出", self.app.quit),
-            ("重载配置", self.app.reload_config),
-            ("打开配置文件夹", self.app.open_config_folder),
-            ("重新搜索歌词", self.app.research),
-        ):
-            item = Gtk.MenuItem(label=label)
-            item.connect("activate", lambda *_args, fn=action: fn())
+
+        def heading(text: str) -> None:
+            item = Gtk.MenuItem(label=text)
+            item.set_sensitive(False)
             menu.append(item)
 
-        menu.append(Gtk.SeparatorMenuItem())
-        for label, delta in (("歌词提前 0.5 秒", -500), ("歌词延后 0.5 秒", 500), ("歌词偏移归零", None)):
+        def action(label: str, callback) -> None:
             item = Gtk.MenuItem(label=label)
-            item.connect("activate", lambda *_args, d=delta: self.app.adjust_offset(d))
+            item.connect("activate", lambda *_args: callback())
             menu.append(item)
 
-        menu.append(Gtk.SeparatorMenuItem())
+        def toggle(label: str, section: str, attribute: str) -> None:
+            item = Gtk.CheckMenuItem(label=label)
+            item.set_active(bool(getattr(getattr(self.config, section), attribute)))
+            item.connect("toggled", self._on_toggle, section, attribute)
+            menu.append(item)
+
+        heading("歌词")
         menu.append(self._build_player_menu())
-        menu.append(Gtk.SeparatorMenuItem())
-        for label, section, attribute in (
-            ("显示翻译", "window", "show_translation"),
-            ("联网搜索中文译文", "lyrics", "search_translation"),
-            ("逐字进度（唱到哪亮到哪）", "window", "karaoke"),
-            ("跟随壁纸明暗", "window", "adapt_to_background"),
-        ):
-            check = Gtk.CheckMenuItem(label=label)
-            check.set_active(bool(getattr(getattr(self.config, section), attribute)))
-            check.connect("toggled", self._on_toggle, section, attribute)
-            menu.append(check)
+        action("重新搜索歌词", self.app.research)
+        toggle("显示翻译（日语歌）", "window", "show_translation")
+        toggle("联网搜索歌词", "lyrics", "online_enabled")
+        toggle("联网搜索中文译文", "lyrics", "search_translation")
 
         menu.append(Gtk.SeparatorMenuItem())
-        item = Gtk.MenuItem(label="恢复默认设置")
-        item.connect("activate", lambda *_args: self.app.restore_defaults())
-        menu.append(item)
+        heading("歌词偏移")
+        for label, delta in (("提前 0.5 秒", -500), ("延后 0.5 秒", 500), ("归零", None)):
+            action(label, lambda d=delta: self.app.adjust_offset(d))
+
+        menu.append(Gtk.SeparatorMenuItem())
+        heading("显示")
+        toggle("逐字进度（唱到哪亮到哪）", "window", "karaoke")
+        toggle("跟随壁纸明暗", "window", "adapt_to_background")
+
+        menu.append(Gtk.SeparatorMenuItem())
+        heading("程序")
+        action("打开配置文件夹", self.app.open_config_folder)
+        action("重载配置", self.app.reload_config)
+        action("退出", self.app.quit)
+
+        menu.append(Gtk.SeparatorMenuItem())
+        action("恢复默认设置", self.app.restore_defaults)
 
         menu.show_all()
         self.menu = menu
@@ -684,8 +699,8 @@ class Overlay:
         self.app.save_setting(section, attribute, item.get_active())
         if attribute == "adapt_to_background":
             self._sample_background()
-        if attribute == "search_translation":
-            # which Chinese is on screen changes, so the lyrics are resolved again
+        if attribute in ("search_translation", "online_enabled"):
+            # which lyrics are on screen changes, so they are resolved again
             self.app.reload_lyrics()
         self._snap()
 
