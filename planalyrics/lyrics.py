@@ -370,6 +370,8 @@ def align_timeline(lyrics: "Lyrics", table: dict, source: str, min_match: float 
     0 -- attaching nothing -- when the two have too little in common to be the
     same song, which is what keeps a wrong match from lighting the wrong words.
     """
+    if all(line.timelines.get(source) for line in lyrics.lines):
+        return 0                       # line for line already reached every one
     timing: list[tuple[str, float, float]] = []
     for line_ms in sorted(table):
         for offset, duration, text in table[line_ms]:
@@ -422,11 +424,18 @@ def _fill_gaps(when: list) -> None:
 
 
 def _attach_chars(lyrics: "Lyrics", when: list, source: str) -> int:
-    """Cut a run of per-character times into one line's worth of units each."""
+    """Cut a run of per-character times into one line's worth of units each.
+
+    A line already carrying this timing is left alone: the alignment is the
+    rougher of the two, so it is only ever a way of reaching the lines that
+    lining the texts up line by line could not, never a replacement for it.
+    """
     placed, cursor = 0, 0
     for line in lyrics.lines:
         chars = when[cursor:cursor + len(line.text)]
         cursor += len(line.text)
+        if source in line.timelines:
+            continue
         units = [
             (max(0, round(item[0] - line.t_ms)), max(0, round(item[1] - item[0])), char)
             for char, item in zip(line.text, chars)

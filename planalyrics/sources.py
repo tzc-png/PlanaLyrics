@@ -11,6 +11,7 @@ import bisect
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 
 import mutagen
@@ -165,11 +166,12 @@ def _add_timing(parsed: Lyrics, track: Track, cache_dir: Path, allowed: bool) ->
         if not text:
             continue
         table = lrc.parse_timing(source, text)
-        # line for line when the two are cut the same way, and failing that by
-        # lining the texts up character by character
-        if lrc.attach_timelines(parsed, source, table):
-            return
-        if lrc.align_timeline(parsed, table, source):
+        # line for line first, which is exact where the two are cut the same way;
+        # whatever that cannot place is offered to the alignment, which reaches
+        # it by lining the two texts up instead
+        placed = lrc.attach_timelines(parsed, source, table)
+        placed += lrc.align_timeline(parsed, table, source)
+        if placed:
             return
 
 
@@ -178,11 +180,19 @@ def _site_answer(track: Track, cache_dir: Path, source: str, fetch) -> str:
 
     A failure to reach the site is not remembered: only an answer is, so a song
     looked up while the network was down is tried again another day.
+
+    Neither is an empty answer remembered for good. The sites drop requests now
+    and then and answer with nothing when they do, which reads exactly like the
+    song not being there -- so an empty answer is believed for an hour and then
+    asked about again, while one that has timing in it is kept because timing
+    does not go stale.
     """
     path = _timing_path(track, cache_dir, source)
     if path is not None:
         try:
-            return path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8")
+            if text or time.time() - path.stat().st_mtime < EMPTY_ANSWER_TTL_S:
+                return text
         except OSError:
             pass
     try:
@@ -219,7 +229,10 @@ ONLINE_TIMING = (
 # Bumped to ask every site again: a change to how one is queried, or to what is
 # made of the answer, can turn a remembered "nothing" into a hit -- and the cache
 # would otherwise hide it.
-TIMING_CACHE_VERSION = 2
+TIMING_CACHE_VERSION = 3
+# how long "this site has nothing for this song" is believed before it is asked
+# about again
+EMPTY_ANSWER_TTL_S = 3600
 
 
 def _map_translations(target: Lyrics, source: list, tolerance_ms: int = 400) -> None:

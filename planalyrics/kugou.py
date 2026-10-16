@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import re
+import time
 import zlib
 from dataclasses import dataclass
 
@@ -31,6 +32,8 @@ HEADERS = {
 }
 TIMEOUT = 8
 MAX_CANDIDATES = 3
+# how long to wait before asking a second time
+RETRY_PAUSE_S = 0.25
 # the blob is xored with this key and then deflated; the four bytes it opens with
 # are a marker, not part of the stream
 _KEY = bytes(
@@ -70,16 +73,26 @@ class _Candidate:
 
 
 def lookup(track: Track) -> tuple[str, str] | None:
-    """Return ``(krc_text, label)`` for the song, or None."""
+    """Return ``(krc_text, label)`` for the song, or None.
+
+    None means the site answered and had nothing. A site that never answered at
+    all is raised instead, because the caller remembers a None and would go on
+    believing this song has no timing anywhere -- which is how a few dropped
+    requests would turn a song that has one into one that never gets it again.
+    """
     if not track.title:
         return None
 
     tried: set[str] = set()
+    failures: list[Exception] = []
+    answered = False
     for query in _queries(track):
         try:
             candidates = _search(query, track.length_ms)
-        except (requests.RequestException, ValueError):
+        except (requests.RequestException, ValueError) as exc:
+            failures.append(exc)
             continue
+        answered = True
         for candidate in candidates[:MAX_CANDIDATES]:
             if candidate.id in tried:
                 continue
@@ -90,10 +103,38 @@ def lookup(track: Track) -> tuple[str, str] | None:
                 continue
             if text.strip():
                 return text, f"酷狗: {candidate.title} - {candidate.artist}"
+    if failures and not answered:
+        raise failures[-1]
     return None
 
 
-def _search(query: str, length_ms: int = 0) -> list[_Candidate]:
+def _search(query: str, length_ms: int = 0, attempts: int = 2) -> list[_Candidate]:
+    """Kugou's search, tried more than once.
+
+    The site drops a request now and then, and answers an empty list rather than
+    an error when it does. An empty answer reads as the song not being there --
+    which the caller would then remember -- so an empty list is retried along
+    with a failed one, and only the last try's answer counts.
+    """
+    found: list[_Candidate] = []
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            found = _asked(query, length_ms)
+        except (requests.RequestException, ValueError) as exc:
+            found, last = [], exc
+        else:
+            if found:
+                return found
+            last = None                # it did answer; it simply has nothing here
+        if attempt + 1 < attempts:
+            time.sleep(RETRY_PAUSE_S)
+    if last is not None:
+        raise last                     # never got an answer at all
+    return found
+
+
+def _asked(query: str, length_ms: int = 0) -> list[_Candidate]:
     response = requests.get(
         SEARCH_URL,
         params={"ver": 1, "man": "yes", "client": "mobi", "keyword": query},
@@ -118,6 +159,11 @@ def _search(query: str, length_ms: int = 0) -> list[_Candidate]:
         # Closeness in length is what tells them apart; the ones with no length
         # given go last rather than sorting as zero.
         found.sort(key=lambda c: (c.duration_ms <= 0, abs(c.duration_ms - length_ms)))
+    else:
+        # Nothing to measure against, which is what the player reports when it
+        # blanks the length. The longest is taken for the full version: the short
+        # edit is the one that would put the timing out of step with the track.
+        found.sort(key=lambda c: c.duration_ms, reverse=True)
     return found
 
 
