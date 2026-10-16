@@ -185,9 +185,11 @@ class Overlay:
         window.set_focus_on_map(False)
         window.set_type_hint(HINTS.get(self.config.window.type_hint, Gdk.WindowTypeHint.UTILITY))
         window.set_keep_above(True)
-        # on every workspace, not only the one it happened to open on: the lyrics
-        # belong to whatever is playing, and changing pages should not hide them
-        window.stick()
+        # on every workspace when asked, not only the one it happened to open on:
+        # the lyrics belong to whatever is playing, and changing pages should not
+        # hide them
+        if self.config.window.all_workspaces:
+            window.stick()
         self._apply_rgba_visual(window)
 
         area = Gtk.DrawingArea()
@@ -229,20 +231,25 @@ class Overlay:
         return False
 
     def _on_window_state(self, _window, event) -> bool:
-        wanted = Gdk.WindowState.ABOVE | Gdk.WindowState.STICKY
+        wanted = Gdk.WindowState.ABOVE
+        if self.config.window.all_workspaces:
+            wanted |= Gdk.WindowState.STICKY
         if event.changed_mask & wanted and (event.new_window_state & wanted) != wanted:
-            GLib.idle_add(self._reassert_window_state)
+            GLib.idle_add(self._apply_window_states)
         return False
 
-    def _reassert_window_state(self) -> bool:
-        """Put back the states the panel must keep, if the manager drops one.
+    def _apply_window_states(self) -> bool:
+        """The states a panel keeps: above other windows, and on every workspace.
 
-        The panel is a panel because it stays above other windows and on every
-        workspace, and both are states a window manager may clear when focus
-        moves between full-screen windows, so both are watched and reapplied.
+        A window manager may clear either when focus moves between full-screen
+        windows, so both are reapplied whenever one is seen to go -- which is what
+        this returns to, as well as what the menu's toggle calls.
         """
         self.window.set_keep_above(True)
-        self.window.stick()
+        if self.config.window.all_workspaces:
+            self.window.stick()
+        else:
+            self.window.unstick()
         return False
 
     def _margin(self) -> int:
@@ -323,8 +330,7 @@ class Overlay:
         self._text_cache.clear()
         self._blur_key = None             # colours and blur size may have changed
         self.window.set_type_hint(HINTS.get(config.window.type_hint, Gdk.WindowTypeHint.UTILITY))
-        self.window.set_keep_above(True)
-        self.window.stick()
+        self._apply_window_states()
         self._build_menu()
         self._apply_panel_size()
         if move_window:
@@ -680,6 +686,7 @@ class Overlay:
         grow.set_sensitive(self.app.font_can_grow())
         shrink = action("减小字号", lambda: self.app.adjust_font(-1))
         shrink.set_sensitive(self.app.font_can_shrink())
+        toggle("跨页面显示（所有工作区）", "window", "all_workspaces")
         action("保存窗口大小和位置", self.app.save_window_geometry)
 
         menu.append(Gtk.SeparatorMenuItem())
@@ -745,6 +752,9 @@ class Overlay:
         self.app.save_setting(section, attribute, item.get_active())
         if attribute == "adapt_to_background":
             self._sample_background()
+        if attribute == "all_workspaces":
+            # takes effect at once, without waiting for the next file read
+            self._apply_window_states()
         if attribute in ("search_translation", "online_enabled"):
             # which lyrics are on screen changes, so they are resolved again
             self.app.reload_lyrics()

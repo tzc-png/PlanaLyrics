@@ -20,6 +20,7 @@ x = 0
 y = 0
 type_hint = "normal"        # normal / utility / dock / notification
 show_in_taskbar = true      # true = 出现在左侧坞栏里（也能从应用程序列表启动）
+all_workspaces = true       # true = 在所有工作区（页面）都显示，翻页时歌词不会消失
 
 # 面板：固定尺寸，中间透明，只有最外层一圈描边
 # 下面的宽高是每次启动时的大小；拖边缘调整只影响本次运行，
