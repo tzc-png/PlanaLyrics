@@ -6,12 +6,13 @@ DES is a soft implementation with a key expansion of its own -- a standard
 Triple-DES library does not undo it, and the difference is not a key or an
 order, so it had to be brought over rather than called.
 
-Ported from WXRIW/QQMusicDecoder's DESHelper.cs and Decrypter.cs (MIT). The bit
-numbering, the two constants that make the expansion its own -- the ``- 27`` on
-the second half of the compression table, and the mask the rotation is taken
-with -- and the order the three passes run in are all as they are there, because
-each of them is load-bearing: the same tables arranged the standard way leave the
-payload as opaque as it began.
+Ported from WXRIW/QQMusicDecoder's DESHelper.cs and Decrypter.cs (MIT; the notice
+is kept in THIRD-PARTY.md at the top of the repository). The bit numbering, the
+two constants that make the expansion its own -- the ``- 27`` on the second half
+of the compression table, and the mask the rotation is taken with -- and the
+order the three passes run in are all as they are there, because each of them is
+load-bearing: the same tables arranged the standard way leave the payload as
+opaque as it began.
 
 Two of the s-boxes are not the ones DES is usually written with -- ``_SBOX[1][23]``
 is 15 where the standard table says 14, and ``_SBOX[3][53]`` is 10 where it says

@@ -125,8 +125,10 @@ offset_ms = 0             # 整首歌词微调，负数 = 提前
   一帧就要跨过大半行——这是刷新率的上限，不是 bug。
 - 只对 MPRIS 播放器工作；播放器不上报元数据时无法定位歌曲。
 
-## 致谢
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。
 
 `planalyrics/qqdes.py` 是 QQ 音乐 QRC 加解密的移植，来自
-[WXRIW/QQMusicDecoder](https://github.com/WXRIW/QQMusicDecoder) 的
-`DESHelper.cs` 与 `Decrypter.cs`（MIT）。
+[WXRIW/QQMusicDecoder](https://github.com/WXRIW/QQMusicDecoder)（MIT）。
+第三方代码及其许可证原文见 [THIRD-PARTY.md](THIRD-PARTY.md)。
