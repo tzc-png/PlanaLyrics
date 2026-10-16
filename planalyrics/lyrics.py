@@ -34,6 +34,8 @@ _YRC_LINE_RE = re.compile(r"^\[(\d+),(\d+)\](.*)$")             # yrc: [start,du
 _YRC_WORD_RE = re.compile(r"\((\d+),(\d+),\d+\)([^(]*)")
 _KRC_LINE_RE = re.compile(r"^\[(\d+),(\d+)\](.*)$")             # krc: [start,dur]<start,dur,0>text
 _KRC_WORD_RE = re.compile(r"<(\d+),(\d+),\d+>([^<]*)")
+_QRC_LINE_RE = re.compile(r"^\[(\d+),(\d+)\](.*)$")             # qrc: [start,dur]text(start,dur)
+_QRC_WORD_RE = re.compile(r"([^()]*)\((\d+),(\d+)\)")
 # the marks on their own, for taking them back out of text that is to be read
 _MARK_RE = re.compile(r"<\d+,\d+>|<\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?>")
 _B64_FIELD_RE = re.compile(r",(?=lrc:|tlrc:|awlrc:)")
@@ -323,7 +325,7 @@ def _enhanced_timeline(text: str) -> dict[int, list[tuple[int, int, str]]]:
 
 def parse_timing(source: str, text: str) -> dict[int, list[tuple[int, int, str]]]:
     """Read a timing document, picking the shape by which site wrote it."""
-    reader = {"yrc": _yrc_timeline, "krc": _krc_timeline}.get(source)
+    reader = {"yrc": _yrc_timeline, "krc": _krc_timeline, "qrc": _qrc_timeline}.get(source)
     return reader(text) if reader else {}
 
 
@@ -462,6 +464,29 @@ def _krc_timeline(text: str) -> dict[int, list[tuple[int, int, str]]]:
         ]
         if units:
             out[int(match.group(1))] = units
+    return out
+
+
+def _qrc_timeline(text: str) -> dict[int, list[tuple[int, int, str]]]:
+    """Timing from QQ Music's QRC, whose unit starts are absolute.
+
+    The units carry their own text rather than being marked off inside the line,
+    so a word written in more than one character -- "Dohzi-" is one unit -- comes
+    back whole. The per-character times are worked out from it later, the same
+    way they are for a timing that arrived line by line.
+    """
+    out: dict[int, list[tuple[int, int, str]]] = {}
+    for raw in text.splitlines():
+        match = _QRC_LINE_RE.match(raw.strip())
+        if match is None:
+            continue
+        line_ms = int(match.group(1))
+        units = [
+            (max(0, int(start) - line_ms), int(duration), unit)
+            for unit, start, duration in _QRC_WORD_RE.findall(match.group(3))
+        ]
+        if units:
+            out[line_ms] = units
     return out
 
 

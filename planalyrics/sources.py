@@ -19,6 +19,7 @@ import mutagen
 from . import kugou
 from . import lyrics as lrc
 from . import net
+from . import qq
 from .lyrics import Lyrics
 from .mpris import Track
 
@@ -269,6 +270,7 @@ def _timing_from_netease(track: Track):
 ONLINE_TIMING = (
     ("yrc", _timing_from_netease),
     ("krc", kugou.candidates),
+    ("qrc", qq.candidates),
 )
 # Bumped to ask every site again: a change to how one is queried, or to what is
 # made of the answer, can turn a remembered "nothing" into a hit -- and the cache
