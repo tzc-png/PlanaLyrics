@@ -73,7 +73,12 @@ THEME_FRAME_MS = 16
 # much of the interval between two lines is swept, and the cap that keeps a long
 # instrumental break from crawling across the line, are both configurable.
 KARAOKE_DEFAULT_MS = 4000.0
-KARAOKE_FRAME_MS = 16
+# The sweep's own frame rate, which is not the app's 100 ms tick: the overlay reads
+# the clock forward in between ticks, so the edge moves here instead. 8 ms is 125 a
+# second, against a panel that runs at 165, so the steps drawn are ones the screen
+# can actually show. At 16 the edge covered 2.6 px of a full line per frame, which
+# reads as a step rather than as movement.
+KARAOKE_FRAME_MS = 8
 # Only redraw once the edge has moved this far along the line -- about a fifth of
 # a pixel on a full-width one, so the sweep is smooth without a frame per tick.
 WIPE_EPSILON = 0.0015
