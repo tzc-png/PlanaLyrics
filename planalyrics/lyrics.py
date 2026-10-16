@@ -464,6 +464,49 @@ def _fill_gaps(when: list) -> None:
                 begin + (end - begin) * (step + 1) / (right - left),
             )
     _share_windows(when)
+    _lend_time(when)
+
+
+def _lend_time(when: list) -> None:
+    """Find time for the characters the timing left none to.
+
+    A lyric that prints a reading after the word it belongs to -- 「月（げつ）」 --
+    lines up with a timing that carries only the word, so every character of the
+    reading is left holding the same instant: no width at all. The sweep counts
+    characters, so a reading finishes the moment it starts and the edge jumps
+    across the whole of it at once. On オレンジ that was half a line in a frame, on
+    line after line, because the lyric prints a reading for nearly every word.
+
+    Dividing a window of no width among its characters gives them no width either,
+    which is why the sharing above cannot help here. The time has to come from
+    somewhere, and where it comes from is the word the reading follows: 「（げつ）」
+    belongs to 「月」 and is sung as part of it, so 月's own window is divided
+    between the two of them. The character that lends is the nearest one behind
+    that has any width to lend.
+    """
+    index = 0
+    while index < len(when):
+        item = when[index]
+        if item is None or item[1] > item[0]:
+            index += 1
+            continue
+        last = index
+        while last + 1 < len(when) and when[last + 1] == item:
+            last += 1
+        lender = index - 1
+        while lender >= 0 and (when[lender] is None or when[lender][1] <= when[lender][0]):
+            lender -= 1
+        if lender < 0:
+            index = last + 1
+            continue
+        begin, finish = when[lender]
+        share = (finish - begin) / (last - lender + 1)
+        for step in range(lender, last + 1):
+            when[step] = (
+                begin + share * (step - lender),
+                begin + share * (step - lender + 1),
+            )
+        index = last + 1
 
 
 def _share_windows(when: list) -> None:
@@ -510,8 +553,17 @@ def _attach_chars(lyrics: "Lyrics", when: list, source: str) -> int:
         cursor += len(line.text)
         if source in line.timelines:
             continue
+        lined_up = [item for item in chars if item is not None]
+        if not lined_up:
+            continue
+        # Characters that line up ahead of their own line's stamp are laid out from
+        # where the earliest of them falls rather than each cut off at zero, which
+        # would stack every one of them on the same instant and lose the order they
+        # were given. A line whose characters all fall after its stamp is untouched:
+        # the origin is then the stamp itself.
+        origin = min([line.t_ms] + [item[0] for item in lined_up])
         units = [
-            (max(0, round(item[0] - line.t_ms)), max(0, round(item[1] - item[0])), char)
+            (max(0, round(item[0] - origin)), max(0, round(item[1] - item[0])), char)
             for char, item in zip(line.text, chars)
             if item is not None
         ]
