@@ -212,16 +212,27 @@ def _place_site_timing(parsed: Lyrics, track: Track, cache_dir: Path, source: st
 
 
 def _put_timing(parsed: Lyrics, source: str, text: str) -> bool:
-    """Lay one timing text over the lyric, saying whether any of it landed.
+    """Lay one timing text over the lyric, saying whether it reaches the song.
 
     Line for line first, which is exact where the two are cut the same way;
     whatever that cannot place is offered to the alignment, which reaches it by
     lining the two texts up instead.
+
+    Landing on a line or two is not enough. A timing from a short edit of the
+    song fits the handful of lines the edit kept and nothing else, and taking
+    that leaves the sweep stopping and starting down the song, which reads as the
+    feature being broken rather than as the site having the wrong cut. What is
+    taken has to reach half the lines; anything less is taken back off the lines
+    it did reach, so the caller's next candidate starts from a clean lyric.
     """
     table = lrc.parse_timing(source, text)
-    placed = lrc.attach_timelines(parsed, source, table)
-    placed += lrc.align_timeline(parsed, table, source)
-    return placed > 0
+    lrc.attach_timelines(parsed, source, table)
+    lrc.align_timeline(parsed, table, source)
+    if parsed.timing_covers(source):
+        return True
+    for line in parsed.lines:
+        line.timelines.pop(source, None)
+    return False
 
 
 def _read_answer(path: Path | None) -> str | None:

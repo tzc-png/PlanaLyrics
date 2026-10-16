@@ -1565,12 +1565,11 @@ def timeline_source_of(lyrics, window) -> str | None:
     """
     if lyrics is None or not lyrics.lines or not window.karaoke:
         return None
-    total = len(lyrics.lines)
     for name, _label, keys in TIMELINE_SOURCES:
         if not getattr(window, "karaoke_" + name):
             continue
         for key in keys:
-            if sum(1 for line in lyrics.lines if line.timelines.get(key)) * 2 >= total:
+            if lyrics.timing_covers(key):
                 return key
     return None
 

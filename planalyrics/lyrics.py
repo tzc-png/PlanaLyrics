@@ -136,6 +136,21 @@ class Lyrics:
             for source, units in list(line.timelines.items()):
                 line.timelines[source] = _units_within(units, span)
 
+    def timing_covers(self, source: str) -> bool:
+        """Whether a timing reaches enough of the lyric to count as this song's.
+
+        A timing from another cut of the song -- a short edit, a television
+        version -- covers whichever lines survived the cut and nothing else, so
+        it leaves the sweep on the average pace for the rest of the song. That is
+        worse than not having it: the sweep stops and starts, and the menu mark
+        comes and goes with it. The bar is half the lines, and it is the one the
+        display goes by as well, so a timing taken is a timing that will be used.
+        """
+        if not self.lines:
+            return False
+        covered = sum(1 for line in self.lines if line.timelines.get(source))
+        return covered * 2 >= len(self.lines)
+
     def index_at(self, t_ms: int) -> int:
         """Index of the line playing at ``t_ms``, or -1 before the first one."""
         if not self._times:
