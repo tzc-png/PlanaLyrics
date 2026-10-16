@@ -168,11 +168,11 @@ def _asked(query: str, length_ms: int = 0) -> list[_Candidate]:
         # Closeness in length is what tells them apart; the ones with no length
         # given go last rather than sorting as zero.
         found.sort(key=lambda c: (c.duration_ms <= 0, abs(c.duration_ms - length_ms)))
-    else:
-        # Nothing to measure against, which is what the player reports when it
-        # blanks the length. The longest is taken for the full version: the short
-        # edit is the one that would put the timing out of step with the track.
-        found.sort(key=lambda c: c.duration_ms, reverse=True)
+    # With no length to measure against -- which is what the player reports when
+    # it blanks the field -- the order the site gave is left alone. It is a
+    # relevance ranking, and reordering by length instead does not pick a
+    # different cut of the song asked for; it picks a different song by the same
+    # artist, whichever of those happens to run longest.
     return found
 
 
