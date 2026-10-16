@@ -19,7 +19,7 @@ from . import locate, sources  # noqa: E402
 from .config import Config  # noqa: E402
 from .lyrics import Lyrics  # noqa: E402
 from .mpris import Track  # noqa: E402
-from .overlay import Overlay  # noqa: E402
+from .overlay import Overlay, timeline_source_of  # noqa: E402
 from .players import PlayerHub  # noqa: E402
 
 TICK_MS = 100
@@ -371,6 +371,7 @@ class App:
                 use_cache=use_cache,
                 preferred_text=self.players.lyric_text(),
                 search_translation=self.config.lyrics.search_translation,
+                online_timing=self.config.window.karaoke_online,
             )
         except Exception as exc:  # a failed lookup must not kill the overlay
             print(f"PlanaLyrics: 查找歌词失败 ({exc})")
@@ -386,7 +387,13 @@ class App:
         if lyrics is not None and lyrics.lines:
             self.lyrics = lyrics
             self.overlay.set_lyrics(lyrics)
-            print(f"PlanaLyrics: {track.title} -> {lyrics.source or '内嵌'} ({len(lyrics.lines)} 行)")
+            # which timing the sweep will follow, so a song that has none is
+            # visible as such rather than only looking a little different
+            timing = timeline_source_of(lyrics, self.config.window) or "线性"
+            print(
+                f"PlanaLyrics: {track.title} -> {lyrics.source or '内嵌'} "
+                f"({len(lyrics.lines)} 行, {timing})"
+            )
         else:
             self.lyrics = None
             if self.config.lyrics.online_enabled:

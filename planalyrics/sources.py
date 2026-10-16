@@ -15,6 +15,7 @@ from pathlib import Path
 
 import mutagen
 
+from . import kugou
 from . import lyrics as lrc
 from . import net
 from .lyrics import Lyrics
@@ -42,6 +43,7 @@ def resolve(
     use_cache: bool = True,
     preferred_text: str | None = None,
     search_translation: bool = True,
+    online_timing: bool = True,
 ) -> Lyrics | None:
     """First source with a usable lyric wins.
 
@@ -51,9 +53,14 @@ def resolve(
     manual re-search, which should query the network rather than replay a cached
     answer.
 
-    ``allow_online`` is the master switch: with it off nothing that came from a
-    search is used, the saved results included, so the settings file's switch
-    changes what is on screen rather than appearing not to have taken.
+    ``allow_online`` governs searching for the lyrics themselves: with it off
+    nothing that came from a search is used, the saved results included, so the
+    settings file's switch changes what is on screen rather than appearing not to
+    have taken.
+
+    ``online_timing`` is the word timing's own switch, separate from that one:
+    wanting the timing from the network is a different wish from wanting the words
+    from it, and the timing is fetched even for a lyric that came off the disk.
 
     ``search_translation`` decides where a Chinese line may come from. Left on, a
     foreign-language song (Japanese, Korean, ...) whose own lyrics carry no
@@ -77,6 +84,7 @@ def resolve(
     if chosen is not None:
         if search_translation and allow_online:
             _add_translation(chosen, track, cache_dir)
+        _add_timing(chosen, track, cache_dir, online_timing)
         return chosen
 
     # Nothing of the listener's own. A saved result counts as a searched one --
@@ -93,6 +101,7 @@ def resolve(
         return stub
     if not search_translation:
         _drop_translations(fetched)
+    _add_timing(fetched, track, cache_dir, online_timing)
     return fetched
 
 
@@ -132,6 +141,82 @@ def _add_translation(parsed: Lyrics, track: Track, cache_dir: Path) -> None:
 def _drop_translations(parsed: Lyrics) -> None:
     for line in parsed.lines:
         line.translation = None
+
+
+def _add_timing(parsed: Lyrics, track: Track, cache_dir: Path, allowed: bool) -> None:
+    """Ask the online sites for the word timing the lyric did not come with.
+
+    A lyric read from a file carries only the timing the file happened to hold,
+    which is usually none, so the sites are asked in turn and the first with
+    something that fits is the one kept. Each site is asked about a song once and
+    its answer remembered -- an empty answer included, so a song with no timing
+    anywhere is not looked up again on every play.
+
+    ``allowed`` is the word timing's own switch, not the one for searching
+    lyrics: wanting the timing from the network is a separate wish from wanting
+    the lyrics from it.
+    """
+    if not allowed:
+        return
+    for source, fetch in ONLINE_TIMING:
+        if any(line.timelines.get(source) for line in parsed.lines):
+            return                     # this site's timing is already in hand
+        text = _site_answer(track, cache_dir, source, fetch)
+        if not text:
+            continue
+        table = lrc.parse_timing(source, text)
+        # line for line: a site and a lyric that are cut the same way need no
+        # more than this
+        if lrc.attach_timelines(parsed, source, table):
+            return
+
+
+def _site_answer(track: Track, cache_dir: Path, source: str, fetch) -> str:
+    """One site's timing text for a track, from the cache or from the site.
+
+    A failure to reach the site is not remembered: only an answer is, so a song
+    looked up while the network was down is tried again another day.
+    """
+    path = _timing_path(track, cache_dir, source)
+    if path is not None:
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    try:
+        result = fetch(track)
+    except Exception:
+        return ""
+    text = result[0] if result else ""
+    if path is not None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            print(f"PlanaLyrics: 无法写入逐字缓存 ({exc})")
+    return text
+
+
+def _timing_from_netease(track: Track) -> tuple[str, str] | None:
+    result = net.lookup(track)
+    if result is None:
+        return None
+    _original, _translation, yrc, label = result
+    return (yrc, label) if yrc.strip() else None
+
+
+def _timing_from_kugou(track: Track) -> tuple[str, str] | None:
+    return kugou.lookup(track)
+
+
+# the sites word timing is asked of, in the order they are asked
+ONLINE_TIMING = (
+    ("yrc", _timing_from_netease),
+    ("krc", _timing_from_kugou),
+)
+# Bumped to ask every site again: a change to how one is queried can turn a
+# remembered "nothing" into a hit -- and the cache would otherwise hide it.
+TIMING_CACHE_VERSION = 1
 
 
 def _map_translations(target: Lyrics, source: list, tolerance_ms: int = 400) -> None:
@@ -237,13 +322,25 @@ def _tag_text(value) -> str:
 # -- cached and online sources -------------------------------------------
 
 
-def _cache_path(track: Track, cache_dir: Path) -> Path | None:
+def _cache_key(track: Track) -> str | None:
     if not track.title:
         return None
-    key = hashlib.sha1(
+    return hashlib.sha1(
         f"{track.title}\x00{track.artist}\x00{track.length_ms}".encode("utf-8")
     ).hexdigest()
-    return cache_dir / "lyrics" / f"{key}.json"
+
+
+def _cache_path(track: Track, cache_dir: Path) -> Path | None:
+    key = _cache_key(track)
+    return None if key is None else cache_dir / "lyrics" / f"{key}.json"
+
+
+def _timing_path(track: Track, cache_dir: Path, source: str) -> Path | None:
+    """Where one site's answer about a track is remembered, empty included."""
+    key = _cache_key(track)
+    if key is None:
+        return None
+    return cache_dir / "timing" / f"{key}.{source}.v{TIMING_CACHE_VERSION}.txt"
 
 
 def _from_cache(track: Track, cache_dir: Path) -> Lyrics | None:
@@ -257,7 +354,9 @@ def _from_cache(track: Track, cache_dir: Path) -> Lyrics | None:
     original = payload.get("lrc") or ""
     if not original.strip():
         return None
-    parsed = lrc.parse_with_translation(original, payload.get("tlrc") or "")
+    parsed = lrc.parse_with_translation(
+        original, payload.get("tlrc") or "", payload.get("yrc") or ""
+    )
     if parsed.lines:
         parsed.source = f"缓存: {payload.get('label') or '网易云'}"
     return parsed
@@ -267,16 +366,18 @@ def _from_online(track: Track, cache_dir: Path) -> Lyrics | None:
     result = net.lookup(track)
     if result is None:
         return None
-    original, translation, label = result
-    parsed = lrc.parse_with_translation(original, translation)
+    original, translation, yrc, label = result
+    parsed = lrc.parse_with_translation(original, translation, yrc)
     if not parsed.lines:
         return None
     parsed.source = label
-    _save_cache(track, cache_dir, original, translation, label)
+    _save_cache(track, cache_dir, original, translation, yrc, label)
     return parsed
 
 
-def _save_cache(track: Track, cache_dir: Path, original: str, translation: str, label: str) -> None:
+def _save_cache(
+    track: Track, cache_dir: Path, original: str, translation: str, yrc: str, label: str
+) -> None:
     path = _cache_path(track, cache_dir)
     if path is None:
         return
@@ -284,7 +385,7 @@ def _save_cache(track: Track, cache_dir: Path, original: str, translation: str, 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(
-                {"lrc": original, "tlrc": translation, "label": label},
+                {"lrc": original, "tlrc": translation, "yrc": yrc, "label": label},
                 ensure_ascii=False,
             ),
             encoding="utf-8",

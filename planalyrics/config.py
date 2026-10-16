@@ -85,6 +85,9 @@ class WindowConfig:
     context_scale: float = 0.75
     blur_px: int = 5
     karaoke: bool = True
+    karaoke_awlrc: bool = True
+    karaoke_online: bool = True
+    karaoke_enhanced: bool = True
     unsung_opacity: float = 0.35
     karaoke_tail: float = 0.88
     karaoke_max_ms: int = 6000

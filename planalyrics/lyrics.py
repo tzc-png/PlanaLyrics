@@ -26,6 +26,15 @@ _META_RE = re.compile(
     re.IGNORECASE,
 )
 _AWLRC_RE = re.compile(r"^\[awlrc:(.*)\]\s*$")
+# three shapes of word-level timing, told apart by how a unit is written:
+_WORD_RE = re.compile(r"<(\d+),(\d+)>([^<]*)")                  # awlrc: <offset,dur>text
+_ENHANCED_RE = re.compile(r"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>")   # enhanced LRC: <mm:ss.xx>
+_YRC_LINE_RE = re.compile(r"^\[(\d+),(\d+)\](.*)$")             # yrc: [start,dur](start,dur,0)text
+_YRC_WORD_RE = re.compile(r"\((\d+),(\d+),\d+\)([^(]*)")
+_KRC_LINE_RE = re.compile(r"^\[(\d+),(\d+)\](.*)$")             # krc: [start,dur]<start,dur,0>text
+_KRC_WORD_RE = re.compile(r"<(\d+),(\d+),\d+>([^<]*)")
+# the marks on their own, for taking them back out of text that is to be read
+_MARK_RE = re.compile(r"<\d+,\d+>|<\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?>")
 _B64_FIELD_RE = re.compile(r",(?=lrc:|tlrc:|awlrc:)")
 _CREDIT_RE = re.compile(
     r"^(作词|作曲|编曲|混音|录音|制作人|制作|Lyricist|Composer|Arranger|Producer)\s*[:：]",
@@ -64,6 +73,11 @@ class Line:
     t_ms: int
     text: str
     translation: str | None = None
+    # Word-level timings for this line, by where each came from: one
+    # ``(offset_ms, duration_ms, text)`` per unit, offsets from the line's start.
+    # A lyric can offer more than one, and the overlay picks among them by the
+    # settings; empty means the sweep has only the average pace to go by.
+    timelines: dict[str, list[tuple[int, int, str]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -149,16 +163,29 @@ def parse(text: str) -> Lyrics:
     if bundle.get("lrc", "").strip():
         entries, unstamped, offset = _timed_entries(bundle["lrc"])
         translations = _translation_map(bundle.get("tlrc", ""))
+        timelines = {
+            "awlrc": _awlrc_timeline(bundle.get("awlrc", "")),
+            "enhanced": _enhanced_timeline(bundle["lrc"]),
+        }
     else:
         entries, unstamped, offset = _timed_entries(body)
         entries, translations = _split_translation_block(entries)
-    return _build(entries, unstamped, offset, translations)
+        timelines = {
+            "awlrc": _awlrc_timeline(body),
+            "enhanced": _enhanced_timeline(body),
+        }
+    return _build(entries, unstamped, offset, translations, timelines)
 
 
-def parse_with_translation(lrc_text: str, tlrc_text: str = "") -> Lyrics:
-    """Parse an original and its translation, as fetched separately online."""
+def parse_with_translation(lrc_text: str, tlrc_text: str = "", yrc_text: str = "") -> Lyrics:
+    """Parse an original, its translation, and the word timing fetched with them."""
     entries, unstamped, offset = _timed_entries(lrc_text)
-    return _build(entries, unstamped, offset, _translation_map(tlrc_text))
+    timelines = {
+        "awlrc": _awlrc_timeline(lrc_text),
+        "enhanced": _enhanced_timeline(lrc_text),
+        "yrc": _yrc_timeline(yrc_text),
+    }
+    return _build(entries, unstamped, offset, _translation_map(tlrc_text), timelines)
 
 
 def _translation_map(text: str) -> dict[int, str]:
@@ -185,6 +212,7 @@ def _build(
     unstamped: list[str],
     offset: int,
     translations: dict[int, str],
+    timelines: dict[str, dict[int, list[tuple[int, int, str]]]] | None = None,
 ) -> Lyrics:
     if not entries:
         plain = [line for line in unstamped if not _CREDIT_RE.match(line)]
@@ -194,8 +222,171 @@ def _build(
     for t_ms, original, translation in _drop_credits(_merge(entries)):
         if translation is None:
             translation = translations.get(t_ms)
-        lines.append(Line(t_ms, original, translation or None))
+        lines.append(
+            Line(t_ms, original, translation or None, _timelines_for(timelines, t_ms, original))
+        )
     return Lyrics(lines=lines, synced=True, offset_ms=offset)
+
+
+def _timelines_for(
+    timelines: dict[str, dict[int, list[tuple[int, int, str]]]] | None, t_ms: int, text: str
+) -> dict[str, list[tuple[int, int, str]]]:
+    """Which of the offered timings can be placed on this line.
+
+    A timing that does not spell the line out character for character cannot be
+    put on its glyphs, so it is dropped here rather than lighting up the wrong
+    characters: the sweep then falls through to the next source, or to the
+    average pace.
+    """
+    kept: dict[str, list[tuple[int, int, str]]] = {}
+    for source, table in (timelines or {}).items():
+        units = table.get(t_ms) or _nearest_units(table, t_ms)
+        if _fits(units, text):
+            kept[source] = units
+    return kept
+
+
+def _nearest_units(table: dict[int, list[tuple[int, int, str]]], t_ms: int, tolerance_ms: int = 700):
+    """The timing nearest ``t_ms``, if one is close enough to be the same line.
+
+    A timing written alongside the lyric shares its timestamps exactly, but one
+    fetched separately -- NetEase's yrc -- is timed independently and lands a few
+    hundred milliseconds away. Matching the words, as the caller does, is what
+    keeps a near miss from being taken for a different line.
+    """
+    best = None
+    for key, units in table.items():
+        delta = abs(key - t_ms)
+        if delta <= tolerance_ms and (best is None or delta < best[0]):
+            best = (delta, units)
+    return None if best is None else best[1]
+
+
+def _stamped_lines(text: str):
+    """``(line_ms, rest)`` for each line that begins with a timestamp."""
+    for raw in text.splitlines():
+        line = raw.strip()
+        match = _TS_RE.match(line)
+        if match is not None:
+            yield _stamp_ms(match), line[match.end():]
+
+
+def _awlrc_timeline(text: str) -> dict[int, list[tuple[int, int, str]]]:
+    """Timing from an AMLL/Lyricify bundle's ``awlrc`` field.
+
+    ``<offset,duration>`` units written after each line's timestamp, the offsets
+    measured from that line's start.
+    """
+    out: dict[int, list[tuple[int, int, str]]] = {}
+    for line_ms, rest in _stamped_lines(text):
+        units = [
+            (int(offset), int(duration), unit)
+            for offset, duration, unit in _WORD_RE.findall(rest)
+        ]
+        if units:
+            out[line_ms] = units
+    return out
+
+
+def _enhanced_timeline(text: str) -> dict[int, list[tuple[int, int, str]]]:
+    """Timing from the inline ``<mm:ss.xx>`` marks of an enhanced LRC.
+
+    Those marks are absolute, so each unit runs until the next mark; the line's
+    last unit runs to the next line, and the song's last line to the end.
+    """
+    per_line: list[tuple[int, list[tuple[int, str]]]] = []
+    for line_ms, rest in _stamped_lines(text):
+        marks = list(_ENHANCED_RE.finditer(rest))
+        units = []
+        for index, mark in enumerate(marks):
+            end = marks[index + 1].start() if index + 1 < len(marks) else len(rest)
+            unit = rest[mark.end():end]
+            if unit:
+                units.append((_stamp_ms(mark), unit))
+        if units:
+            per_line.append((line_ms, units))
+
+    out: dict[int, list[tuple[int, int, str]]] = {}
+    for index, (line_ms, units) in enumerate(per_line):
+        line_end = per_line[index + 1][0] if index + 1 < len(per_line) else 0
+        timed = []
+        for position, (start, unit) in enumerate(units):
+            if position + 1 < len(units):
+                duration = units[position + 1][0] - start
+            else:
+                duration = line_end - start
+            timed.append((max(0, start - line_ms), max(0, duration), unit))
+        out[line_ms] = timed
+    return out
+
+
+def parse_timing(source: str, text: str) -> dict[int, list[tuple[int, int, str]]]:
+    """Read a timing document, picking the shape by which site wrote it."""
+    reader = {"yrc": _yrc_timeline, "krc": _krc_timeline}.get(source)
+    return reader(text) if reader else {}
+
+
+def attach_timelines(lyrics: "Lyrics", source: str, table: dict) -> int:
+    """Put a separately fetched timing onto a lyric already parsed.
+
+    Returns how many lines it could be placed on. The same rule the parse-time
+    sources go by applies here, and matters more: a timing fetched from another
+    site is timed independently, so a near line is accepted when the words match
+    and a line whose words differ is left to the average pace.
+    """
+    placed = 0
+    for line in lyrics.lines:
+        units = table.get(line.t_ms) or _nearest_units(table, line.t_ms)
+        if _fits(units, line.text):
+            line.timelines[source] = units
+            placed += 1
+    return placed
+
+
+def _fits(units, text: str) -> bool:
+    """Whether a timing can be placed on a line.
+
+    It has to spell the line out character for character, or it would light up
+    the wrong characters; and it has to carry a duration somewhere, or it says
+    nothing about pace -- which is what an enhanced LRC's last line amounts to,
+    having no next line to run up to.
+    """
+    return bool(units) and any(unit[1] > 0 for unit in units) and (
+        "".join(unit[2] for unit in units).strip() == text.strip()
+    )
+
+
+def _krc_timeline(text: str) -> dict[int, list[tuple[int, int, str]]]:
+    """Timing from Kugou's krc, whose unit offsets count from the line's start."""
+    out: dict[int, list[tuple[int, int, str]]] = {}
+    for raw in text.splitlines():
+        match = _KRC_LINE_RE.match(raw.strip())
+        if match is None:
+            continue
+        units = [
+            (int(offset), int(duration), unit)
+            for offset, duration, unit in _KRC_WORD_RE.findall(match.group(3))
+        ]
+        if units:
+            out[int(match.group(1))] = units
+    return out
+
+
+def _yrc_timeline(text: str) -> dict[int, list[tuple[int, int, str]]]:
+    """Timing from NetEase's ``yrc``, whose unit starts are absolute."""
+    out: dict[int, list[tuple[int, int, str]]] = {}
+    for raw in text.splitlines():
+        match = _YRC_LINE_RE.match(raw.strip())
+        if match is None:
+            continue
+        line_ms = int(match.group(1))
+        units = [
+            (max(0, int(start) - line_ms), int(duration), unit)
+            for start, duration, unit in _YRC_WORD_RE.findall(match.group(3))
+        ]
+        if units:
+            out[line_ms] = units
+    return out
 
 
 def _stamp_ms(match: re.Match) -> int:
@@ -230,6 +421,14 @@ def _segments(line: str) -> list[tuple[list[int], str]]:
     return groups
 
 
+def _strip_marks(text: str) -> str:
+    """Take inline word-timing marks back out of text that is meant to be read.
+
+    They are timing, not lyric, and a line that kept them would print them.
+    """
+    return _MARK_RE.sub("", text)
+
+
 def _clean(text: str) -> str:
     """Drop the tail of a line once the tag's bytes stopped decoding.
 
@@ -255,10 +454,10 @@ def _timed_entries(text: str) -> tuple[list[tuple[int, str]], list[str], int]:
                 if meta.group(1).lower() == "offset":
                     offset = _to_int(meta.group(2), offset)
                 continue
-            unstamped.append(_clean(line))
+            unstamped.append(_strip_marks(_clean(line)))
             continue
         for times, rest in groups:
-            rest = _clean(rest)
+            rest = _strip_marks(_clean(rest))
             if rest:
                 meta = _META_RE.match(rest)
                 if meta:

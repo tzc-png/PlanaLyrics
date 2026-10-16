@@ -95,8 +95,8 @@ class Candidate:
     score: float
 
 
-def lookup(track: Track) -> tuple[str, str, str] | None:
-    """Return ``(original_lrc, translation_lrc, label)``, or None."""
+def lookup(track: Track) -> tuple[str, str, str, str] | None:
+    """Return ``(original_lrc, translation_lrc, yrc, label)``, or None."""
     if not track.title:
         return None
 
@@ -110,7 +110,7 @@ def lookup(track: Track) -> tuple[str, str, str] | None:
     )
 
     tried: set[int] = set()
-    fallback: tuple[str, str, str] | None = None
+    fallback: tuple[str, str, str, str] | None = None
     for query in queries(track):
         try:
             candidates = search(query, reference)
@@ -121,15 +121,15 @@ def lookup(track: Track) -> tuple[str, str, str] | None:
                 continue
             tried.add(candidate.song_id)
             try:
-                original, translation = _lyrics(candidate.song_id)
+                original, translation, yrc = _lyrics(candidate.song_id)
             except (requests.RequestException, ValueError):
                 continue
             if not original.strip():
                 continue
             label = f"网易云: {candidate.title} - {candidate.artist}"
             if _STAMP_RE.search(original):
-                return original, translation, label
-            fallback = fallback or (original, translation, label)
+                return original, translation, yrc, label
+            fallback = fallback or (original, translation, yrc, label)
     return fallback
 
 
@@ -171,10 +171,16 @@ def _score(candidate: Candidate, track: Track) -> float:
     return score
 
 
-def _lyrics(song_id: int) -> tuple[str, str]:
+def _lyrics(song_id: int) -> tuple[str, str, str]:
+    """``(original, translation, yrc)`` for one song.
+
+    ``os=pc`` asks for the desktop flavour, the one that also serves the
+    word-level ``yrc``; the same request returns the same ``lrc`` and ``tlyric``
+    as before, so nothing changes for the songs that have no ``yrc`` to offer.
+    """
     response = requests.get(
         LYRIC_URL,
-        params={"id": song_id, "lv": 1, "tv": -1, "kv": 0},
+        params={"os": "pc", "id": song_id, "lv": 1, "tv": 1, "kv": 1, "rv": 1, "yv": 1},
         headers=HEADERS,
         timeout=TIMEOUT,
     )
@@ -182,7 +188,8 @@ def _lyrics(song_id: int) -> tuple[str, str]:
     payload = response.json()
     original = (payload.get("lrc") or {}).get("lyric") or ""
     translation = (payload.get("tlyric") or {}).get("lyric") or ""
-    return original, translation
+    yrc = (payload.get("yrc") or {}).get("lyric") or ""
+    return original, translation, yrc
 
 
 def _ratio(left: str, right: str) -> float:

@@ -42,6 +42,11 @@ context_opacity = 0.2     # 前后那几句的不透明度（淡到背景里，�
 context_scale = 0.75       # 前后那几句的字号比例（切句时会平滑放大/缩小）
 blur_px = 5                # 前后那几句的模糊半径（像素）：0=不模糊，越大越糊
 karaoke = true             # 当前句按时间从左到右“唱到哪亮到哪”
+# 下面三项是「逐字进度」的逐字时间来源，按书写顺序优先取用；
+# 三项都取不到（或全都关掉）时，退回按整句平均时间推进。
+karaoke_awlrc = true       # 歌词自带的 awlrc 逐字轴（AMLL/Lyricify 格式）
+karaoke_online = true      # 联网取逐字歌词：先网易云（yrc），没有再试酷狗（krc）；与上面的联网搜歌词开关无关
+karaoke_enhanced = true    # 行内 <mm:ss.xx> 的增强型 LRC
 unsung_opacity = 0.35      # 还没唱到的部分的亮度（相对已唱部分），0 = 完全看不见
 karaoke_tail = 0.88        # 扫描在“距下一句还有多少比例”时结束：1 = 一直扫到下一句
 karaoke_max_ms = 6000      # 单句扫描的最长毫秒数，间隔很长时不会慢慢扫一整天
@@ -78,6 +83,6 @@ show_translation = true    # 非中英文的歌曲（日语、韩语等）显示
 [lyrics]
 music_dirs = []            # 本地音乐目录，用于在播放器不给文件路径时反查
 cache_dir = ""
-online_enabled = true      # 联网总开关：关掉后不联网，之前的联网结果也不再使用
+online_enabled = true      # 联网搜索歌词与译文：关掉后不再联网找歌词（逐字歌词另有开关）
 search_translation = true  # 非中英文歌曲自己不带中文时，联网补一条中文译文
 offset_ms = 0              # 歌词整体微调，负数=提前

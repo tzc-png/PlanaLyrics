@@ -80,6 +80,18 @@ WIPE_EPSILON = 0.0015
 # the lyric size karaoke_lift's pixels were tuned at: the lift scales with the
 # font so it keeps the same share of the glyph height as the font changes
 KARAOKE_LIFT_REFERENCE = 34.0
+# Word-level timings a lyric can carry, best first. Each entry is the tail of its
+# setting -- ``karaoke_awlrc`` and so on -- the label the menu shows, and the keys
+# its timing is stored under: one apiece for the lyric's own sources, one per site
+# for the online chain, whose sites are asked in turn. The menu lists them in this
+# order and the sweep tries them in it -- the first one switched on that covers the
+# line being sung wins -- and the ramp over the line's average pace is what is left
+# when none of them can.
+TIMELINE_SOURCES = (
+    ("awlrc", "使用awlrc", ("awlrc",)),
+    ("online", "使用联网逐字歌词", ("yrc", "krc")),
+    ("enhanced", "支持增强LRC", ("enhanced",)),
+)
 
 
 @dataclass
@@ -456,7 +468,58 @@ class Overlay:
         if span is None:
             return None
         start, sweep = span
-        return max(0.0, min(1.0, (self._clock_now() - start) / sweep))
+        now = self._clock_now()
+        exact = self._exact_progress(now - start)
+        if exact is not None:
+            return exact
+        return max(0.0, min(1.0, (now - start) / sweep))
+
+    def _exact_progress(self, elapsed_ms: float) -> float | None:
+        """The sweep from the line's own timing, if a switched-on source has one.
+
+        The sources are tried in the order the menu lists them, so what the
+        settings say about precedence is literally what happens. None when none
+        of them can place the line, leaving the caller the average pace.
+        """
+        line = self._current_line()
+        if line is None:
+            return None
+        window = self.config.window
+        for name, _label, keys in TIMELINE_SOURCES:
+            if not getattr(window, "karaoke_" + name):
+                continue
+            for key in keys:
+                progress = _timeline_progress(line.timelines.get(key), elapsed_ms)
+                if progress is not None:
+                    return progress
+        return None
+
+    def _current_line(self):
+        """The line being sung, or None when there is no song to be on."""
+        lyrics, index = self.lyrics, self.index
+        if lyrics is None or index is None or not (0 <= index < len(lyrics.lines)):
+            return None
+        return lyrics.lines[index]
+
+    def _active_timeline_source(self) -> str | None:
+        """Which timing source is driving the sweep for the line on screen now.
+
+        This is what the menu marks, so the settings say which source is really
+        in use and not only which are allowed: one can be switched on and still
+        have nothing for this song -- or for this line of it, since the credits
+        and the instrumental passages of a lyric usually carry no timing at all.
+        None means none of them can place this line, and the average pace is what
+        is left.
+        """
+        line = self._current_line()
+        if line is None or not self.config.window.karaoke:
+            return None
+        for name, _label, keys in TIMELINE_SOURCES:
+            if not getattr(self.config.window, "karaoke_" + name):
+                continue
+            if any(line.timelines.get(key) for key in keys):
+                return name
+        return None
 
     def _row_wipe(self, row: VisualRow) -> tuple[float, bool] | None:
         """How much of ``row`` has been sung: ``(progress, sweeps)``, else None.
@@ -662,11 +725,12 @@ class Overlay:
             menu.append(item)
             return item
 
-        def toggle(label: str, section: str, attribute: str) -> None:
+        def toggle(label: str, section: str, attribute: str):
             item = Gtk.CheckMenuItem(label=label)
             item.set_active(bool(getattr(getattr(self.config, section), attribute)))
             item.connect("toggled", self._on_toggle, section, attribute)
             menu.append(item)
+            return item
 
         heading("歌词")
         menu.append(self._build_player_menu())
@@ -692,6 +756,15 @@ class Overlay:
         menu.append(Gtk.SeparatorMenuItem())
         heading("显示")
         toggle("逐字进度（唱到哪亮到哪）", "window", "karaoke")
+        active = self._active_timeline_source()
+        for name, label, _keys in TIMELINE_SOURCES:
+            mark = "　（当前）" if name == active else ""
+            item = toggle(label + mark, "window", "karaoke_" + name)
+            # sub-settings of the sweep above them, indented and inert without it.
+            # The margin, not a leading space in the label, is what carries the
+            # tick in with it: a space would only shift the words.
+            item.set_margin_start(20)
+            item.set_sensitive(bool(self.config.window.karaoke))
         toggle("跟随壁纸明暗", "window", "adapt_to_background")
 
         menu.append(Gtk.SeparatorMenuItem())
@@ -1477,6 +1550,57 @@ def _lift_runs(bounds: list[float], edge: float, lift: float, span: float):
         else:
             runs.append([start, end, raise_])
     return [(x0, x1, raise_) for x0, x1, raise_ in runs]
+
+
+def timeline_source_of(lyrics, window) -> str | None:
+    """Which timing a whole lyric will be sung with, given the settings.
+
+    The first source switched on that covers most of the lyric's lines -- the
+    order the menu lists, which is the order the sweep tries -- or None when the
+    lyric has none to offer and the average pace is all there is. The name given
+    back is the timing's own (``yrc`` for a NetEase answer, ``krc`` for Kugou's),
+    so a log line says which site it was. The menu marks the source for the line
+    on screen; this asks the same question of the song, for the log.
+    """
+    if lyrics is None or not lyrics.lines or not window.karaoke:
+        return None
+    total = len(lyrics.lines)
+    for name, _label, keys in TIMELINE_SOURCES:
+        if not getattr(window, "karaoke_" + name):
+            continue
+        for key in keys:
+            if sum(1 for line in lyrics.lines if line.timelines.get(key)) * 2 >= total:
+                return key
+    return None
+
+
+def _timeline_progress(units, elapsed_ms: float) -> float | None:
+    """How much of a line has been sung, as a fraction of its characters.
+
+    ``units`` is the line's own word-level timing -- ``(offset, duration, text)``
+    each, offsets measured from the line's start. Counting characters rather than
+    time is what puts the sweep on the character being sung: real singing is not
+    even, and a ramp over the line's average pace drifts from it by seconds on a
+    line with a held note or a rushed phrase.
+
+    None when there is no timing to go by, so the caller falls back to the
+    average pace. The units are known to spell out the line -- the parser checks
+    that before keeping them -- so their characters are the line's characters.
+    """
+    if not units:
+        return None
+    total = sum(len(text) for _offset, _duration, text in units)
+    if total <= 0:
+        return None
+    sung = 0
+    for offset, duration, text in units:
+        if elapsed_ms < offset:
+            break
+        if duration <= 0 or elapsed_ms >= offset + duration:
+            sung += len(text)
+            continue
+        return min(1.0, (sung + len(text) * (elapsed_ms - offset) / duration) / total)
+    return min(1.0, sung / total)
 
 
 def _box_blur(values: np.ndarray, radius: int, axis: int) -> np.ndarray:
