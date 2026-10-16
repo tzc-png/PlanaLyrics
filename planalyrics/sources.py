@@ -87,6 +87,7 @@ def resolve(
         if search_translation and allow_online:
             _add_translation(chosen, track, cache_dir)
         _add_timing(chosen, track, cache_dir, online_timing)
+        chosen.fit_timelines()
         return chosen
 
     # Nothing of the listener's own. A saved result counts as a searched one --
@@ -104,6 +105,7 @@ def resolve(
     if not search_translation:
         _drop_translations(fetched)
     _add_timing(fetched, track, cache_dir, online_timing)
+    fetched.fit_timelines()
     return fetched
 
 

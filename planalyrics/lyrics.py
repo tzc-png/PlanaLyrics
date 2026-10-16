@@ -111,6 +111,31 @@ class Lyrics:
         """
         return self.script == "other"
 
+    def fit_timelines(self) -> None:
+        """Keep every line's word timing inside the line it belongs to.
+
+        A timing fetched from a site is clocked by that site's copy of the song,
+        and the copy is often not this one -- another master, a remix, a version
+        sung in another language. Its words then run past the end of the line
+        they are on: 81 of the 83 lines of 願い～あの頃のキミへ～ did, each by about
+        1.8 s, which is the whole of the gap between the two clocks. The sweep
+        counts characters rather than seconds, so it was still a little over half
+        way through when the next line arrived, and the rest of the line was
+        never shown sung at all.
+
+        The line's own timestamp is the one that knows when this file sings this
+        line, so where the two disagree it is the words that give way: the sung
+        part of an overrunning line is moved to begin with the line and squeezed
+        to end with it. A line that already fits is left exactly as it is, so a
+        timing that agrees with the file is never disturbed to no purpose.
+        """
+        for line, following in zip(self.lines, self.lines[1:]):
+            span = following.t_ms - line.t_ms
+            if span <= 0:
+                continue               # unsynced, or two lines share a stamp
+            for source, units in list(line.timelines.items()):
+                line.timelines[source] = _units_within(units, span)
+
     def index_at(self, t_ms: int) -> int:
         """Index of the line playing at ``t_ms``, or -1 before the first one."""
         if not self._times:
@@ -449,6 +474,37 @@ def _attach_chars(lyrics: "Lyrics", when: list, source: str) -> int:
             line.timelines[source] = units
             placed += 1
     return placed
+
+
+def _units_within(units, span: int):
+    """Squeeze a line's word timing into ``span`` milliseconds, if it overruns.
+
+    The units come back untouched when they already end within the span. Where
+    they overrun, the stretch of time they cover is scaled to the span, so that
+    the first word lands with the line and the last one with the end of it --
+    which is what the line's own timestamp is saying and what the two clocks
+    disagree about.
+
+    A duration of zero is an instant rather than a mistake and is left as one,
+    but a duration rounded away to nothing would read as a word never sung, so
+    any that was not zero keeps at least a millisecond.
+    """
+    begin = min(offset for offset, _duration, _text in units)
+    end = max(offset + duration for offset, duration, _text in units)
+    if end <= span:
+        return units
+    width = end - begin
+    if width <= 0:
+        return units
+    scale = span / width
+    return [
+        (
+            max(0, round((offset - begin) * scale)),
+            round(duration * scale) if duration <= 0 else max(1, round(duration * scale)),
+            text,
+        )
+        for offset, duration, text in units
+    ]
 
 
 def _krc_timeline(text: str) -> dict[int, list[tuple[int, int, str]]]:
