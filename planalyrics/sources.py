@@ -32,9 +32,12 @@ _LYRIC_KEYS = ("lyrics", "unsyncedlyrics", "syncedlyrics", "lyric", "©lyr")
 # win over it -- but a deliberate notice like "纯音乐，请欣赏" is the real lyric
 # of an instrumental and is kept as-is
 MIN_USEFUL_LINES = 3
-INSTRUMENTAL_RE = re.compile(
-    r"纯音乐|请欣赏|仅音乐|纯乐器|无歌词|暂无歌词|没有歌词|instrumental", re.IGNORECASE
-)
+# 纯音乐 and nothing else. A notice can put it several ways -- 请欣赏 on its own,
+# 仅音乐, 纯乐器, 无歌词, 暂无歌词, "instrumental" -- and the rest of them are left
+# to be searched for on purpose: 无歌词 and 暂无歌词 say the words are missing,
+# which is a reason to go looking for them, and it is 纯音乐 that says there are
+# none to find.
+INSTRUMENTAL_RE = re.compile(r"纯音乐")
 
 
 def resolve(
