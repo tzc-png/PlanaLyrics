@@ -80,6 +80,15 @@ WIPE_EPSILON = 0.0015
 # the lyric size karaoke_lift's pixels were tuned at: the lift scales with the
 # font so it keeps the same share of the glyph height as the font changes
 KARAOKE_LIFT_REFERENCE = 34.0
+# The little light in the bottom-left corner. It is there because "still working"
+# and "done" are otherwise invisible on a window with no other chrome: a lookup
+# takes seconds and leaves nothing behind to say it had been out. Red while one is
+# in flight, green once it has been answered -- answered with nothing included,
+# since a song no site has a lyric for is not work still outstanding.
+STATUS_LIGHT_RADIUS = 4.5
+STATUS_LIGHT_INSET = 12.0
+STATUS_BUSY_RGB = (0.94, 0.29, 0.26)
+STATUS_IDLE_RGB = (0.26, 0.80, 0.35)
 # Word-level timings a lyric can carry, best first. Each entry is the tail of its
 # setting -- ``karaoke_awlrc`` and so on -- the label the menu shows, and the keys
 # its timing is stored under: one apiece for the lyric's own sources, one per site
@@ -149,6 +158,7 @@ class Overlay:
         self.lyrics: Lyrics | None = None
         self.index: int | None = None
         self.status = ""
+        self.busy = False
         self.menu: Gtk.Menu | None = None
         # 0 = light text (dark background), 1 = dark text (light background)
         self._theme_mix = 0.0
@@ -309,6 +319,12 @@ class Overlay:
         self.index = None
         self.status = text
         self._snap()
+
+    def set_busy(self, busy: bool) -> None:
+        """Say whether a lookup is still out, which the corner light shows."""
+        if busy != self.busy:
+            self.busy = busy
+            self.area.queue_draw()
 
     def set_index(self, index: int) -> None:
         if index != self.index:
@@ -1190,9 +1206,29 @@ class Overlay:
             self._draw_row(cr, row)
 
         self._fade_edges(cr, width, height, settings.edge_fade)
+        self._draw_status_light(cr, height)
         cr.restore()
         cr.restore()
         return True
+
+    def _draw_status_light(self, cr, height: int) -> None:
+        """The corner light: red while a lookup is out, green once it is answered.
+
+        Drawn after the edge fade, so the fade does not dim it -- it is a signal
+        rather than part of the lyric -- and inside the panel's clip, so it cannot
+        stray out past the rounded corner.
+        """
+        # A rounder corner reaches further into the panel, and the light stands
+        # off it by enough to stay whole: an arc of radius r comes r(1 - 1/sqrt 2)
+        # in from the corner, and the light's own radius sits on top of that.
+        inset = max(
+            STATUS_LIGHT_INSET,
+            self.config.window.corner_radius * 0.3 + STATUS_LIGHT_RADIUS,
+        )
+        red, green, blue = STATUS_BUSY_RGB if self.busy else STATUS_IDLE_RGB
+        cr.set_source_rgba(red, green, blue, 1.0)
+        cr.arc(inset, height - inset, STATUS_LIGHT_RADIUS, 0.0, 2 * math.pi)
+        cr.fill()
 
     def _draw_blurred(self, cr, rows, width, height) -> None:
         blur_px = max(0, int(self.config.window.blur_px))

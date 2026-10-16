@@ -325,6 +325,7 @@ class App:
     def _start_lookup(self, track: Track, use_cache: bool = True) -> None:
         self.generation += 1
         generation = self.generation
+        self.overlay.set_busy(True)
         # Only admit to searching if it takes a moment. A lyric that is already
         # on disk arrives in a few milliseconds, and the notice would be a flash
         # of title-and-artist between the old song's last line and the new
@@ -407,10 +408,14 @@ class App:
 
         ``final`` is False for the lyric read off the file, which is shown at once
         and is about to be replaced by the same lyric with a site's timing on it.
-        Only the final answer is logged, so the log still says one thing per song.
+        Only the final answer is logged, and only the final answer settles the
+        corner light, so the log says one thing per song and the light goes out
+        when the song is really done rather than when its lyric first appears.
         """
         if generation != self.generation:
             return False
+        if final:
+            self.overlay.set_busy(False)
         # the answer is here, so the "looking for lyrics" notice is not wanted
         if self._notice_timer:
             GLib.source_remove(self._notice_timer)
