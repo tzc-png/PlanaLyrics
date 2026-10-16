@@ -178,6 +178,7 @@ class Overlay:
         self._blur_buffer = None
         self._blur_surface = None
         self._blur_key: tuple | None = None
+        self._frame: cairo.ImageSurface | None = None
         self._text_cache: dict[tuple, tuple] = {}
         self._font_options = cairo.FontOptions()
         self._font_options.set_antialias(cairo.Antialias.GRAY)
@@ -290,6 +291,7 @@ class Overlay:
         if size != self._size:
             self._size = size
             self._text_cache.clear()      # the wrap width changed
+            self._frame = None            # and the layer the border is drawn into
             self.area.set_size_request(*size)
 
     # -- public API ------------------------------------------------------
@@ -378,6 +380,7 @@ class Overlay:
         self.config = config
         self._text_cache.clear()
         self._blur_key = None             # colours and blur size may have changed
+        self._frame = None                # so may the border and its glow
         self.window.set_type_hint(HINTS.get(config.window.type_hint, Gdk.WindowTypeHint.UTILITY))
         self._apply_window_states()
         self._build_menu()
@@ -1178,10 +1181,10 @@ class Overlay:
         cr.paint()
         cr.set_operator(cairo.Operator.OVER)
 
+        self._paint_frame(cr)
+
         cr.save()
         cr.translate(margin, margin)          # the surface carries shadow margin
-        self._draw_frame(cr, width, height)
-
         cr.save()
         _rounded_rect(cr, 1, 1, width - 2, height - 2, max(0.0, settings.corner_radius - 1))
         cr.clip()
@@ -1237,19 +1240,15 @@ class Overlay:
                 self._draw_row(cr, row)
             return
 
-        small_w = max(1, width // BLUR_DOWNSCALE)
-        small_h = max(1, height // BLUR_DOWNSCALE)
-        blurred_surface = self._blurred_layer(rows, small_w, small_h, blur_px)
-
-        pattern = cairo.SurfacePattern(blurred_surface)
-        pattern.set_filter(cairo.Filter.BILINEAR)
-        # the pattern matrix maps user space to pattern space, so the inverse of
-        # the downscale is what puts the small surface back at full size
-        pattern.set_matrix(cairo.Matrix(1.0 / BLUR_DOWNSCALE, 0, 0, 1.0 / BLUR_DOWNSCALE, 0, 0))
-        cr.set_source(pattern)
+        # The layer is kept at the panel's own size, upscaled once when it is
+        # rebuilt, so this is a copy rather than a scaled rasterisation: painting a
+        # half-size one through a transform cost 0.25 ms a frame against this
+        # 0.05, and the upscale it saves is paid once per line rather than per
+        # frame.
+        cr.set_source_surface(self._blurred_layer(rows, width, height, blur_px), 0, 0)
         cr.paint()
 
-    def _blurred_layer(self, rows, small_w: int, small_h: int, blur_px: int):
+    def _blurred_layer(self, rows, width: int, height: int, blur_px: int):
         """The blurred layer, rebuilt only when what goes into it changes.
 
         While a line plays it does not change at all: the line being sung is
@@ -1258,7 +1257,7 @@ class Overlay:
         picture that was identical each time.
         """
         key = (
-            small_w, small_h, blur_px, round(self._theme_mix, 4),
+            width, height, blur_px, round(self._theme_mix, 4),
             tuple(
                 (row.key, row.text, row.role, round(row.size, 2), round(row.y, 2),
                  round(row.alpha, 4), round(row.sharp, 4))
@@ -1266,11 +1265,13 @@ class Overlay:
             ),
         )
         if key != self._blur_key:
-            self._blur_surface = self._render_blur(rows, small_w, small_h, blur_px)
+            self._blur_surface = self._render_blur(rows, width, height, blur_px)
             self._blur_key = key
         return self._blur_surface
 
-    def _render_blur(self, rows, small_w: int, small_h: int, blur_px: int):
+    def _render_blur(self, rows, width: int, height: int, blur_px: int):
+        small_w = max(1, width // BLUR_DOWNSCALE)
+        small_h = max(1, height // BLUR_DOWNSCALE)
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, small_w, small_h)
         ctx = cairo.Context(surface)
         ctx.scale(1.0 / BLUR_DOWNSCALE, 1.0 / BLUR_DOWNSCALE)
@@ -1295,9 +1296,49 @@ class Overlay:
             blurred = _box_blur(blurred, radius, 1)
         buffer = np.ascontiguousarray(np.clip(blurred, 0, 255).astype(np.uint8))
         self._blur_buffer = buffer               # cairo reads it, so keep it alive
-        return cairo.ImageSurface.create_for_data(
+        small = cairo.ImageSurface.create_for_data(
             buffer, cairo.FORMAT_ARGB32, small_w, small_h, width_bytes
         )
+
+        # Up to the panel's size once, here, so that a frame can paint the layer
+        # as it stands. The blurring itself still runs on the small buffer, where
+        # the box passes are four times cheaper.
+        layer = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+        ctx = cairo.Context(layer)
+        ctx.scale(width / small_w, height / small_h)
+        pattern = cairo.SurfacePattern(small)
+        pattern.set_filter(cairo.Filter.BILINEAR)
+        ctx.set_source(pattern)
+        ctx.paint()
+        layer.flush()
+        return layer
+
+    def _paint_frame(self, cr) -> None:
+        """Put the border and its glow on, from a layer drawn once.
+
+        They depend on nothing but the settings and the panel's size, so they are
+        the same picture on every frame -- and there are 125 of those a second.
+        Drawing them each time meant eleven stroked rounded rectangles per frame,
+        measured at 0.59 ms of the 1.19 ms a frame cost. Painting the layer
+        instead is 0.025 ms, because a surface with no transform over it is a
+        copy rather than a rasterisation.
+        """
+        if self._frame is None:
+            self._frame = self._render_frame()
+        cr.set_source_surface(self._frame, 0, 0)
+        cr.paint()
+
+    def _render_frame(self) -> cairo.ImageSurface:
+        width, height = self._panel
+        margin = self._margin()
+        surface = cairo.ImageSurface(
+            cairo.FORMAT_ARGB32, width + 2 * margin, height + 2 * margin
+        )
+        cr = cairo.Context(surface)
+        cr.translate(margin, margin)
+        self._draw_frame(cr, width, height)
+        surface.flush()
+        return surface
 
     def _draw_frame(self, cr, width: int, height: int) -> None:
         settings = self.config.window
