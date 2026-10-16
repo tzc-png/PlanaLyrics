@@ -279,11 +279,16 @@ def _timing_from_netease(track: Track):
         yield yrc, label
 
 
-# the sites word timing is asked of, in the order they are asked
+# The sites word timing is asked of, in the order they are asked. NetEase is last
+# because it has not answered once: it came back with nothing for each of the seven
+# songs it was tried on, while the other two answered for most of them, and asking
+# it first spends a search on a site that is not going to reply. It keeps a place
+# rather than being dropped -- it is the one source left that might have something
+# the other two do not, and it costs nothing to have it asked last.
 ONLINE_TIMING = (
-    ("yrc", _timing_from_netease),
     ("krc", kugou.candidates),
     ("qrc", qq.candidates),
+    ("yrc", _timing_from_netease),
 )
 # Bumped to ask every site again: a change to how one is queried, or to what is
 # made of the answer, can turn a remembered "nothing" into a hit -- and the cache

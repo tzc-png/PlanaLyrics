@@ -91,10 +91,12 @@ KARAOKE_LIFT_REFERENCE = 34.0
 # Every timing the chain can attach belongs in one of these tuples. A source left
 # out is not merely unlisted: its timing is fetched, put on the lines, and then
 # never looked at, so the sweep ramps over the average pace and both the menu and
-# the log report the song as having no word timing at all.
+# the log report the song as having no word timing at all. The keys inside a group
+# are kept in the order sources.py asks them in, so the two lists cannot drift
+# apart.
 TIMELINE_SOURCES = (
     ("awlrc", "使用awlrc", ("awlrc",)),
-    ("online", "使用联网逐字歌词", ("yrc", "krc", "qrc")),
+    ("online", "使用联网逐字歌词", ("krc", "qrc", "yrc")),
     ("enhanced", "支持增强LRC", ("enhanced",)),
 )
 
