@@ -84,6 +84,8 @@ def resolve(
         stub = stub or lyrics
 
     if chosen is not None:
+        if _is_instrumental_notice(chosen):
+            return chosen
         if search_translation and allow_online:
             _add_translation(chosen, track, cache_dir)
         _add_timing(chosen, track, cache_dir, online_timing)
@@ -104,12 +106,25 @@ def resolve(
         return stub
     if not search_translation:
         _drop_translations(fetched)
+    if _is_instrumental_notice(fetched):
+        return fetched
     _add_timing(fetched, track, cache_dir, online_timing)
     fetched.fit_timelines()
     return fetched
 
 
 def _is_instrumental_notice(lyrics: Lyrics) -> bool:
+    """Whether the lyric says there are no words rather than being them.
+
+    "纯音乐，请欣赏" is the whole of what a file's tags hold for an instrumental, so
+    it is taken as the song's lyric rather than passed over for a stub. It is also
+    the end of the matter: there are no words to translate and none to give a word
+    timing to, so neither is searched for. Every one of those searches would be a
+    request spent on a song that has nothing to search for, and the timing in
+    particular can only come back wrong -- the sites do carry lines for
+    instrumentals, and putting one of those on a two-line notice would light the
+    notice up word by word as if it were being sung.
+    """
     return any(INSTRUMENTAL_RE.search(line.text) for line in lyrics.lines)
 
 
