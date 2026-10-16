@@ -220,8 +220,15 @@ def _triple_des_key_setup(key: bytes, mode: int) -> list[list[list[int]]]:
 
 
 def decrypt(encoded: str) -> str:
-    """Undo one QRC payload: hex to bytes, three passes, then inflate."""
+    """Undo one QRC payload: hex to bytes, three passes, then inflate.
+
+    The payload comes from a site, so its shape is checked rather than assumed: a
+    hex string that is not a whole number of 8-byte blocks is refused here, where
+    it reads as a bad answer, instead of failing further down as a short block.
+    """
     payload = bytes.fromhex(encoded)
+    if len(payload) % 8:
+        raise ValueError("QRC payload is not a whole number of blocks")
     setup = _triple_des_key_setup(KEY, DECRYPT)
     plain = bytearray()
     for offset in range(0, len(payload), 8):
