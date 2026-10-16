@@ -185,6 +185,9 @@ class Overlay:
         window.set_focus_on_map(False)
         window.set_type_hint(HINTS.get(self.config.window.type_hint, Gdk.WindowTypeHint.UTILITY))
         window.set_keep_above(True)
+        # on every workspace, not only the one it happened to open on: the lyrics
+        # belong to whatever is playing, and changing pages should not hide them
+        window.stick()
         self._apply_rgba_visual(window)
 
         area = Gtk.DrawingArea()
@@ -226,14 +229,20 @@ class Overlay:
         return False
 
     def _on_window_state(self, _window, event) -> bool:
-        if event.changed_mask & Gdk.WindowState.ABOVE and not (
-            event.new_window_state & Gdk.WindowState.ABOVE
-        ):
-            GLib.idle_add(self._reassert_above)
+        wanted = Gdk.WindowState.ABOVE | Gdk.WindowState.STICKY
+        if event.changed_mask & wanted and (event.new_window_state & wanted) != wanted:
+            GLib.idle_add(self._reassert_window_state)
         return False
 
-    def _reassert_above(self) -> bool:
+    def _reassert_window_state(self) -> bool:
+        """Put back the states the panel must keep, if the manager drops one.
+
+        The panel is a panel because it stays above other windows and on every
+        workspace, and both are states a window manager may clear when focus
+        moves between full-screen windows, so both are watched and reapplied.
+        """
         self.window.set_keep_above(True)
+        self.window.stick()
         return False
 
     def _margin(self) -> int:
@@ -315,6 +324,7 @@ class Overlay:
         self._blur_key = None             # colours and blur size may have changed
         self.window.set_type_hint(HINTS.get(config.window.type_hint, Gdk.WindowTypeHint.UTILITY))
         self.window.set_keep_above(True)
+        self.window.stick()
         self._build_menu()
         self._apply_panel_size()
         if move_window:
