@@ -745,11 +745,6 @@ class Overlay:
         toggle("联网搜索中文译文", "lyrics", "search_translation")
 
         menu.append(Gtk.SeparatorMenuItem())
-        heading("歌词偏移")
-        for label, delta in (("提前 0.5 秒", -500), ("延后 0.5 秒", 500), ("归零", None)):
-            action(label, lambda d=delta: self.app.adjust_offset(d))
-
-        menu.append(Gtk.SeparatorMenuItem())
         heading("窗口")
         grow = action("增大字号", lambda: self.app.adjust_font(+1))
         grow.set_sensitive(self.app.font_can_grow())

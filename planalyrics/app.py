@@ -240,12 +240,6 @@ class App:
         if self.track is not None:
             self._start_lookup(self.track)
 
-    def adjust_offset(self, delta_ms: int | None) -> None:
-        self.config.lyrics.offset_ms = 0 if delta_ms is None else self.config.lyrics.offset_ms + delta_ms
-        self.save_setting("lyrics", "offset_ms", self.config.lyrics.offset_ms)
-        self.overlay.force_redraw()
-        print(f"PlanaLyrics: 歌词偏移 {self.config.lyrics.offset_ms} ms")
-
     def adjust_font(self, direction: int) -> None:
         """Move both font sizes one step up (+1) or down (-1).
 
