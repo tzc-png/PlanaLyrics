@@ -16,6 +16,7 @@ import bisect
 import codecs
 import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from typing import Iterable
@@ -354,6 +355,89 @@ def _fits(units, text: str) -> bool:
     return bool(units) and any(unit[1] > 0 for unit in units) and (
         "".join(unit[2] for unit in units).strip() == text.strip()
     )
+
+
+def align_timeline(lyrics: "Lyrics", table: dict, source: str, min_match: float = 0.6) -> int:
+    """Lay a timing from elsewhere over the lyric by lining the two texts up.
+
+    A timing fetched from another site is not only clocked independently, it is
+    usually cut into different lines -- one site breaks a sentence where the
+    lyric breaks a phrase -- and its words can differ a little, a syllable
+    written out where the lyric uses the character for it. Matching line against
+    line therefore finds nothing at all, so the whole lyric is lined up against
+    the whole timing character by character instead, and each character takes the
+    time of the character it lines up with. Returns how many lines it covered, or
+    0 -- attaching nothing -- when the two have too little in common to be the
+    same song, which is what keeps a wrong match from lighting the wrong words.
+    """
+    timing: list[tuple[str, float, float]] = []
+    for line_ms in sorted(table):
+        for offset, duration, text in table[line_ms]:
+            start = line_ms + offset
+            for index, char in enumerate(text):
+                timing.append((char, start + duration * index / len(text),
+                               start + duration * (index + 1) / len(text)))
+    lyric_text = "".join(line.text for line in lyrics.lines)
+    if not timing or not lyric_text:
+        return 0
+
+    matcher = SequenceMatcher(None, lyric_text, "".join(item[0] for item in timing), autojunk=False)
+    when: list[tuple[float, float] | None] = [None] * len(lyric_text)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            continue
+        for step in range(i2 - i1):
+            when[i1 + step] = (timing[j1 + step][1], timing[j1 + step][2])
+
+    lined_up = sum(1 for item in when if item is not None)
+    if lined_up < min_match * len(lyric_text):
+        return 0
+    _fill_gaps(when)
+    return _attach_chars(lyrics, when, source)
+
+
+def _fill_gaps(when: list) -> None:
+    """Give the characters that lined up with nothing a time of their own.
+
+    A character the other text spells differently is still sung, so it takes a
+    share of the time between the characters either side of it -- the closest the
+    two texts can come to agreeing.
+    """
+    known = [index for index, item in enumerate(when) if item is not None]
+    if not known:
+        return
+    for index in range(known[0]):
+        when[index] = when[known[0]]
+    for index in range(known[-1] + 1, len(when)):
+        when[index] = when[known[-1]]
+    for left, right in zip(known, known[1:]):
+        if right - left <= 1:
+            continue
+        begin, end = when[left][1], when[right][0]
+        for step in range(1, right - left):
+            when[left + step] = (
+                begin + (end - begin) * step / (right - left),
+                begin + (end - begin) * (step + 1) / (right - left),
+            )
+
+
+def _attach_chars(lyrics: "Lyrics", when: list, source: str) -> int:
+    """Cut a run of per-character times into one line's worth of units each."""
+    placed, cursor = 0, 0
+    for line in lyrics.lines:
+        chars = when[cursor:cursor + len(line.text)]
+        cursor += len(line.text)
+        units = [
+            (max(0, round(item[0] - line.t_ms)), max(0, round(item[1] - item[0])), char)
+            for char, item in zip(line.text, chars)
+            if item is not None
+        ]
+        if units and any(unit[1] > 0 for unit in units) and (
+            "".join(unit[2] for unit in units) == line.text
+        ):
+            line.timelines[source] = units
+            placed += 1
+    return placed
 
 
 def _krc_timeline(text: str) -> dict[int, list[tuple[int, int, str]]]:

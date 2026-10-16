@@ -165,9 +165,11 @@ def _add_timing(parsed: Lyrics, track: Track, cache_dir: Path, allowed: bool) ->
         if not text:
             continue
         table = lrc.parse_timing(source, text)
-        # line for line: a site and a lyric that are cut the same way need no
-        # more than this
+        # line for line when the two are cut the same way, and failing that by
+        # lining the texts up character by character
         if lrc.attach_timelines(parsed, source, table):
+            return
+        if lrc.align_timeline(parsed, table, source):
             return
 
 
@@ -214,9 +216,10 @@ ONLINE_TIMING = (
     ("yrc", _timing_from_netease),
     ("krc", _timing_from_kugou),
 )
-# Bumped to ask every site again: a change to how one is queried can turn a
-# remembered "nothing" into a hit -- and the cache would otherwise hide it.
-TIMING_CACHE_VERSION = 1
+# Bumped to ask every site again: a change to how one is queried, or to what is
+# made of the answer, can turn a remembered "nothing" into a hit -- and the cache
+# would otherwise hide it.
+TIMING_CACHE_VERSION = 2
 
 
 def _map_translations(target: Lyrics, source: list, tolerance_ms: int = 400) -> None:
