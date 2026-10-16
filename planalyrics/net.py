@@ -96,7 +96,13 @@ class Candidate:
 
 
 def lookup(track: Track) -> tuple[str, str, str, str] | None:
-    """Return ``(original_lrc, translation_lrc, yrc, label)``, or None."""
+    """Return ``(original_lrc, translation_lrc, yrc, label)``, or None.
+
+    None means the site answered and had nothing for this song. A site that was
+    never reached at all is raised instead: the caller remembers what it is
+    given, and a lookup that quietly returned None through a dropped connection
+    would be remembered as this song having no lyrics on the site.
+    """
     if not track.title:
         return None
 
@@ -111,11 +117,15 @@ def lookup(track: Track) -> tuple[str, str, str, str] | None:
 
     tried: set[int] = set()
     fallback: tuple[str, str, str, str] | None = None
+    failures: list[Exception] = []
+    answered = False
     for query in queries(track):
         try:
             candidates = search(query, reference)
-        except (requests.RequestException, ValueError):
+        except (requests.RequestException, ValueError) as exc:
+            failures.append(exc)
             continue
+        answered = True
         for candidate in candidates[:MAX_CANDIDATES]:
             if candidate.song_id in tried:
                 continue
@@ -130,6 +140,8 @@ def lookup(track: Track) -> tuple[str, str, str, str] | None:
             if _STAMP_RE.search(original):
                 return original, translation, yrc, label
             fallback = fallback or (original, translation, yrc, label)
+    if failures and not answered:
+        raise failures[-1]
     return fallback
 
 

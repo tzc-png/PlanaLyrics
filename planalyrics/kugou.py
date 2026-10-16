@@ -31,7 +31,11 @@ HEADERS = {
     "Accept": "application/json, text/plain, */*",
 }
 TIMEOUT = 8
-MAX_CANDIDATES = 3
+# The caller stops at the first cut that lands on the words, so a longer list
+# costs nothing until every one of them has been tried and failed -- which is
+# where it earns its keep: the right cut sat third behind two takes of the same
+# song in another language, and only trying it got the timing at all.
+MAX_CANDIDATES = 8
 # how long to wait before asking a second time
 RETRY_PAUSE_S = 0.25
 # the blob is xored with this key and then deflated; the four bytes it opens with
@@ -72,16 +76,22 @@ class _Candidate:
     duration_ms: int = 0
 
 
-def lookup(track: Track) -> tuple[str, str] | None:
-    """Return ``(krc_text, label)`` for the song, or None.
+def candidates(track: Track):
+    """Every timing Kugou offers for the song, the likeliest cut first.
 
-    None means the site answered and had nothing. A site that never answered at
-    all is raised instead, because the caller remembers a None and would go on
-    believing this song has no timing anywhere -- which is how a few dropped
-    requests would turn a song that has one into one that never gets it again.
+    Yielded one at a time rather than gathered into a list so that the caller can
+    stop at the first that lands on the words. Fetching is the expensive half and
+    there is nothing to be gained from downloading the second cut once the first
+    has fitted.
+
+    Running out with nothing yielded means the site answered and had nothing. A
+    site that never answered at all is raised instead, because the caller
+    remembers what it is given and would go on believing this song has no timing
+    anywhere -- which is how a few dropped requests would turn a song that has
+    one into one that never gets it again.
     """
     if not track.title:
-        return None
+        return
 
     tried: set[str] = set()
     failures: list[Exception] = []
@@ -102,10 +112,9 @@ def lookup(track: Track) -> tuple[str, str] | None:
             except (requests.RequestException, ValueError, zlib.error):
                 continue
             if text.strip():
-                return text, f"酷狗: {candidate.title} - {candidate.artist}"
+                yield text, f"酷狗: {candidate.title} - {candidate.artist}"
     if failures and not answered:
         raise failures[-1]
-    return None
 
 
 def _search(query: str, length_ms: int = 0, attempts: int = 2) -> list[_Candidate]:

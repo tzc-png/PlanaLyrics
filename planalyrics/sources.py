@@ -162,69 +162,113 @@ def _add_timing(parsed: Lyrics, track: Track, cache_dir: Path, allowed: bool) ->
     for source, fetch in ONLINE_TIMING:
         if any(line.timelines.get(source) for line in parsed.lines):
             return                     # this site's timing is already in hand
-        text = _site_answer(track, cache_dir, source, fetch)
-        if not text:
-            continue
-        table = lrc.parse_timing(source, text)
-        # line for line first, which is exact where the two are cut the same way;
-        # whatever that cannot place is offered to the alignment, which reaches
-        # it by lining the two texts up instead
-        placed = lrc.attach_timelines(parsed, source, table)
-        placed += lrc.align_timeline(parsed, table, source)
-        if placed:
+        if _place_site_timing(parsed, track, cache_dir, source, fetch):
             return
 
 
-def _site_answer(track: Track, cache_dir: Path, source: str, fetch) -> str:
-    """One site's timing text for a track, from the cache or from the site.
+def _place_site_timing(parsed: Lyrics, track: Track, cache_dir: Path, source: str, fetch) -> bool:
+    """Put one site's timing onto the lyric, taking a cut that fits.
 
-    A failure to reach the site is not remembered: only an answer is, so a song
-    looked up while the network was down is tried again another day.
+    What the site offered last time is tried first, so a song whose timing is
+    already known costs no request at all. Failing that the site is asked, and
+    every cut it offers is tried rather than only the one it put first: the same
+    song sits on these sites several times over -- the full version, a short
+    edit, a version sung in another language -- and the likeliest by length is
+    not necessarily the one this lyric is a version of.
 
-    Neither is an empty answer remembered for good. The sites drop requests now
-    and then and answer with nothing when they do, which reads exactly like the
-    song not being there -- so an empty answer is believed for an hour and then
-    asked about again, while one that has timing in it is kept because timing
-    does not go stale.
+    Only a timing that lands on the words is taken, and only that is remembered.
+    A candidate was once taken for carrying any text at all, which is how the
+    English cut of a Japanese song came to be written to the cache on every play
+    and left that song on the sweep for good.
     """
     path = _timing_path(track, cache_dir, source)
-    if path is not None:
-        try:
-            text = path.read_text(encoding="utf-8")
-            if text or time.time() - path.stat().st_mtime < EMPTY_ANSWER_TTL_S:
-                return text
-        except OSError:
-            pass
+    remembered = _read_answer(path)
+    if remembered:
+        if _put_timing(parsed, source, remembered):
+            return True
+        # a remembered answer that no longer fits is not the end of it: the site
+        # is asked again, so a better cut can replace it rather than be shut out
+        # by it for as long as the cache lives
+    elif remembered is not None:
+        return False                   # believed to have nothing, for now
     try:
-        result = fetch(track)
+        offered = fetch(track)
     except Exception:
-        return ""
-    text = result[0] if result else ""
-    if path is not None:
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-        except OSError as exc:
-            print(f"PlanaLyrics: 无法写入逐字缓存 ({exc})")
-    return text
+        return False                   # never reached the site; remember nothing
+    try:
+        for text, _label in offered:
+            if not text or text == remembered:
+                continue
+            if _put_timing(parsed, source, text):
+                _write_answer(path, text)
+                return True
+    except Exception:
+        return False                   # never reached the site; remember nothing
+    _write_answer(path, "")
+    return False
 
 
-def _timing_from_netease(track: Track) -> tuple[str, str] | None:
+def _put_timing(parsed: Lyrics, source: str, text: str) -> bool:
+    """Lay one timing text over the lyric, saying whether any of it landed.
+
+    Line for line first, which is exact where the two are cut the same way;
+    whatever that cannot place is offered to the alignment, which reaches it by
+    lining the two texts up instead.
+    """
+    table = lrc.parse_timing(source, text)
+    placed = lrc.attach_timelines(parsed, source, table)
+    placed += lrc.align_timeline(parsed, table, source)
+    return placed > 0
+
+
+def _read_answer(path: Path | None) -> str | None:
+    """What is remembered for a site, or None when it has to be asked again.
+
+    An empty answer is remembered too, but only for an hour. The sites drop a
+    request now and then and answer with nothing when they do, which reads
+    exactly like the song not being there -- so an empty answer is believed for
+    an hour and then asked about again, while one with timing in it is kept
+    because timing does not go stale.
+    """
+    if path is None:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if text:
+        return text
+    try:
+        fresh = time.time() - path.stat().st_mtime < EMPTY_ANSWER_TTL_S
+    except OSError:
+        return None
+    return "" if fresh else None
+
+
+def _write_answer(path: Path | None, text: str) -> None:
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(f"PlanaLyrics: 无法写入逐字缓存 ({exc})")
+
+
+def _timing_from_netease(track: Track):
+    """NetEase has at most one timing to give: its ``yrc``, or none."""
     result = net.lookup(track)
     if result is None:
-        return None
+        return
     _original, _translation, yrc, label = result
-    return (yrc, label) if yrc.strip() else None
-
-
-def _timing_from_kugou(track: Track) -> tuple[str, str] | None:
-    return kugou.lookup(track)
+    if yrc.strip():
+        yield yrc, label
 
 
 # the sites word timing is asked of, in the order they are asked
 ONLINE_TIMING = (
     ("yrc", _timing_from_netease),
-    ("krc", _timing_from_kugou),
+    ("krc", kugou.candidates),
 )
 # Bumped to ask every site again: a change to how one is queried, or to what is
 # made of the answer, can turn a remembered "nothing" into a hit -- and the cache
@@ -385,7 +429,10 @@ def _from_cache(track: Track, cache_dir: Path) -> Lyrics | None:
 
 
 def _from_online(track: Track, cache_dir: Path) -> Lyrics | None:
-    result = net.lookup(track)
+    try:
+        result = net.lookup(track)
+    except Exception:
+        return None                    # the site never answered; nothing to show
     if result is None:
         return None
     original, translation, yrc, label = result
