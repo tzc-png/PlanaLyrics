@@ -326,11 +326,17 @@ def _tag_text(value) -> str:
 
 
 def _cache_key(track: Track) -> str | None:
+    """The identity a song is remembered by.
+
+    Title and artist only. The player reports the length as zero often enough --
+    re-emitting its metadata with the field momentarily blanked -- that a cache
+    keyed on it misses on the very song it just wrote, and looks the lyric and
+    the timing up afresh. The length still decides which cut of a song a timing
+    is taken from; it is just not part of who the song is.
+    """
     if not track.title:
         return None
-    return hashlib.sha1(
-        f"{track.title}\x00{track.artist}\x00{track.length_ms}".encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha1(f"{track.title}\x00{track.artist}".encode("utf-8")).hexdigest()
 
 
 def _cache_path(track: Track, cache_dir: Path) -> Path | None:
