@@ -177,9 +177,18 @@ def _add_timing(parsed: Lyrics, track: Track, cache_dir: Path, allowed: bool) ->
     ``allowed`` is the word timing's own switch, not the one for searching
     lyrics: wanting the timing from the network is a separate wish from wanting
     the lyrics from it.
+
+    A lyric already carrying its own awlrc is left alone. That is the timing the
+    sweep shows in preference to anything a site can add -- awlrc comes first of
+    the three in TIMELINE_SOURCES, in overlay.py, which is where that order is
+    set out -- so a search here is one whose answer is never displayed. It is also
+    the slowest thing this program does: two sites searched, each with the
+    downloads that follow, on every song opened for the first time.
     """
     if not allowed:
         return
+    if parsed.timing_covers("awlrc"):
+        return                         # its own timing is the one that gets shown
     for source, fetch in ONLINE_TIMING:
         if any(line.timelines.get(source) for line in parsed.lines):
             return                     # this site's timing is already in hand
