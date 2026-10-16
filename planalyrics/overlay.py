@@ -87,9 +87,14 @@ KARAOKE_LIFT_REFERENCE = 34.0
 # order and the sweep tries them in it -- the first one switched on that covers the
 # line being sung wins -- and the ramp over the line's average pace is what is left
 # when none of them can.
+#
+# Every timing the chain can attach belongs in one of these tuples. A source left
+# out is not merely unlisted: its timing is fetched, put on the lines, and then
+# never looked at, so the sweep ramps over the average pace and both the menu and
+# the log report the song as having no word timing at all.
 TIMELINE_SOURCES = (
     ("awlrc", "使用awlrc", ("awlrc",)),
-    ("online", "使用联网逐字歌词", ("yrc", "krc")),
+    ("online", "使用联网逐字歌词", ("yrc", "krc", "qrc")),
     ("enhanced", "支持增强LRC", ("enhanced",)),
 )
 
@@ -1558,9 +1563,10 @@ def timeline_source_of(lyrics, window) -> str | None:
     The first source switched on that covers most of the lyric's lines -- the
     order the menu lists, which is the order the sweep tries -- or None when the
     lyric has none to offer and the average pace is all there is. The name given
-    back is the timing's own (``yrc`` for a NetEase answer, ``krc`` for Kugou's),
-    so a log line says which site it was. The menu marks the source for the line
-    on screen; this asks the same question of the song, for the log.
+    back is the timing's own (``yrc`` for a NetEase answer, ``krc`` for Kugou's,
+    ``qrc`` for QQ's), so a log line says which site it was. The menu marks the
+    source for the line on screen; this asks the same question of the song, for
+    the log.
     """
     if lyrics is None or not lyrics.lines or not window.karaoke:
         return None
