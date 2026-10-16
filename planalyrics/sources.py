@@ -319,8 +319,12 @@ ONLINE_TIMING = (
 )
 # Bumped to ask every site again: a change to how one is queried, or to what is
 # made of the answer, can turn a remembered "nothing" into a hit -- and the cache
-# would otherwise hide it.
-TIMING_CACHE_VERSION = 3
+# would otherwise hide it. The same goes the other way: an answer taken under a
+# weaker rule, or from a candidate the search would no longer reach, is replayed
+# for as long as it is remembered. オレンジ was holding a cover version's timing
+# that way, taken before the search was ordered as it is now, and it covered every
+# line -- badly -- so nothing rejected it.
+TIMING_CACHE_VERSION = 4
 # how long "this site has nothing for this song" is believed before it is asked
 # about again
 EMPTY_ANSWER_TTL_S = 3600
