@@ -285,8 +285,22 @@ class Overlay:
     # -- public API ------------------------------------------------------
 
     def set_lyrics(self, lyrics: Lyrics) -> None:
+        """Show a lyric, keeping the line on screen where it is still the same one.
+
+        A song can hand its lyric over twice: what the file holds, and then the
+        same lyric with the word timing a site has added to it. Those are the same
+        lines and the song has not moved, so the view is left alone -- clearing
+        the index would take the display off the line being sung and back onto it
+        to say that nothing about it had changed.
+        """
+        before = (
+            [(line.t_ms, line.text) for line in self.lyrics.lines]
+            if self.lyrics is not None
+            else None
+        )
         self.lyrics = lyrics
-        self.index = None
+        if before != [(line.t_ms, line.text) for line in lyrics.lines]:
+            self.index = None
         self.status = ""
         self._snap()
 

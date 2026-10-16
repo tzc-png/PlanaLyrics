@@ -349,7 +349,6 @@ class App:
 
     def _lookup_worker(self, track: Track, generation: int, use_cache: bool) -> None:
         path = None
-        lyrics = None
         try:
             path = locate.locate(
                 track,
@@ -357,21 +356,59 @@ class App:
                 self.config.lyrics.resolved_cache_dir,
                 self.players.player_pid(),
             )
-            lyrics = sources.resolve(
+        except Exception as exc:  # a failed lookup must not kill the overlay
+            print(f"PlanaLyrics: 查找歌词失败 ({exc})")
+        # What the file itself holds is on screen in a millisecond or two; the word
+        # timing the sites can add is a search that can take seconds. Putting the
+        # first up and then the second over it is the difference between the song's
+        # own lyric appearing at once and the overlay sitting on "正在查找歌词…" for
+        # as long as the search runs. A song with nothing of its own has nothing to
+        # show early, and waits for the search as it always did.
+        local = self._resolve_lyrics(track, path, local_only=True)
+        if local is not None:
+            GLib.idle_add(self._apply_lookup, track, generation, path, local, False)
+        found = self._resolve_lyrics(track, path, use_cache=use_cache)
+        GLib.idle_add(self._apply_lookup, track, generation, path, found, True)
+
+    def _resolve_lyrics(
+        self,
+        track: Track,
+        path: Path | None,
+        local_only: bool = False,
+        use_cache: bool = True,
+    ) -> Lyrics | None:
+        """The lyric for a track: only what its own file holds, or the sites too."""
+        try:
+            return sources.resolve(
                 path,
                 track,
                 self.config.lyrics.resolved_cache_dir,
-                allow_online=self.config.lyrics.online_enabled,
+                allow_online=not local_only and self.config.lyrics.online_enabled,
                 use_cache=use_cache,
                 preferred_text=self.players.lyric_text(),
-                search_translation=self.config.lyrics.search_translation,
-                online_timing=self.config.window.karaoke_online,
+                search_translation=(
+                    not local_only and self.config.lyrics.search_translation
+                ),
+                online_timing=not local_only and self.config.window.karaoke_online,
             )
         except Exception as exc:  # a failed lookup must not kill the overlay
             print(f"PlanaLyrics: 查找歌词失败 ({exc})")
-        GLib.idle_add(self._apply_lookup, track, generation, path, lyrics)
+            return None
 
-    def _apply_lookup(self, track: Track, generation: int, path: Path | None, lyrics: Lyrics | None) -> bool:
+    def _apply_lookup(
+        self,
+        track: Track,
+        generation: int,
+        path: Path | None,
+        lyrics: Lyrics | None,
+        final: bool = True,
+    ) -> bool:
+        """Show what a lookup found.
+
+        ``final`` is False for the lyric read off the file, which is shown at once
+        and is about to be replaced by the same lyric with a site's timing on it.
+        Only the final answer is logged, so the log still says one thing per song.
+        """
         if generation != self.generation:
             return False
         # the answer is here, so the "looking for lyrics" notice is not wanted
@@ -383,11 +420,12 @@ class App:
             self.overlay.set_lyrics(lyrics)
             # which timing the sweep will follow, so a song that has none is
             # visible as such rather than only looking a little different
-            timing = timeline_source_of(lyrics, self.config.window) or "线性"
-            print(
-                f"PlanaLyrics: {track.title} -> {lyrics.source or '内嵌'} "
-                f"({len(lyrics.lines)} 行, {timing})"
-            )
+            if final:
+                timing = timeline_source_of(lyrics, self.config.window) or "线性"
+                print(
+                    f"PlanaLyrics: {track.title} -> {lyrics.source or '内嵌'} "
+                    f"({len(lyrics.lines)} 行, {timing})"
+                )
         else:
             self.lyrics = None
             if self.config.lyrics.online_enabled:
