@@ -463,6 +463,38 @@ def _fill_gaps(when: list) -> None:
                 begin + (end - begin) * step / (right - left),
                 begin + (end - begin) * (step + 1) / (right - left),
             )
+    _share_windows(when)
+
+
+def _share_windows(when: list) -> None:
+    """Give each character of a shared window its own share of it.
+
+    Lining a lyric up with a timing leaves runs of characters that matched
+    nothing, and the fill above drops each run into the window of the character
+    nearest it, so the whole run ends up holding one window between them. The
+    sweep counts characters rather than seconds, so a run like that is not sung
+    one after another as it should be: they are all in progress together and all
+    finish on the same tick, and the edge jumps by the length of the run at once.
+    願い～あの頃のキミへ～ opened on 「ふたりの思い出」 against a timing reading
+    「二人の思い出」, and the three syllables that did not match made the sweep
+    jump better than half the line in one frame.
+
+    Dividing the window among them costs the run its own timing, which it never
+    had, and keeps the sweep moving instead.
+    """
+    index = 0
+    while index < len(when):
+        end = index + 1
+        while end < len(when) and when[end] == when[index]:
+            end += 1
+        if end - index > 1 and when[index] is not None:
+            begin, finish = when[index]
+            for step in range(end - index):
+                when[index + step] = (
+                    begin + (finish - begin) * step / (end - index),
+                    begin + (finish - begin) * (step + 1) / (end - index),
+                )
+        index = end
 
 
 def _attach_chars(lyrics: "Lyrics", when: list, source: str) -> int:
