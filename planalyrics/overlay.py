@@ -59,7 +59,7 @@ RESIZE_ZONE = 9
 # area is deliberately much bigger than the circle drawn: they appear only once
 # something is already being aimed at, and a small target is the last thing
 # wanted then. Three of them, 60 px across, fit the smallest panel there is.
-CONTROL_RADIUS = 15.0
+CONTROL_RADIUS = 20.0
 CONTROL_HIT = 30.0
 CONTROL_GAP = 74.0               # between the centres of neighbouring buttons
 CONTROL_BOTTOM = 36.0            # centre height above the panel's bottom edge
@@ -1309,30 +1309,46 @@ class Overlay:
             self._draw_control_glyph(cr, action, centre_x, centre_y)
 
     def _draw_control_glyph(self, cr, action: str, centre_x: float, centre_y: float) -> None:
-        size = CONTROL_RADIUS * 0.58
+        """The mark inside one button, laid out about the button's own centre.
+
+        Every shape is placed symmetrically either side of ``centre_x``: an
+        earlier version measured each one from its left edge, which put the skip
+        marks four or five pixels off the middle of a circle small enough for
+        that to be plainly visible.
+        """
+        size = CONTROL_RADIUS * 0.60
+        top, bottom = centre_y - size, centre_y + size
+
         if action == "playpause":
             if self._clock_playing:
-                for offset in (-size * 0.46, size * 0.18):     # two bars
-                    cr.rectangle(centre_x + offset, centre_y - size, size * 0.28, size * 2)
+                width, gap = size * 0.38, size * 0.38
+                for left in (-gap / 2 - width, gap / 2):
+                    cr.rectangle(centre_x + left, top, width, size * 2)
                 cr.fill()
             else:
-                cr.move_to(centre_x - size * 0.55, centre_y - size)
-                cr.line_to(centre_x + size * 0.85, centre_y)
-                cr.line_to(centre_x - size * 0.55, centre_y + size)
+                cr.move_to(centre_x - size * 0.78, top)
+                cr.line_to(centre_x + size * 0.78, centre_y)
+                cr.line_to(centre_x - size * 0.78, bottom)
                 cr.close_path()
                 cr.fill()
             return
 
-        back = action == "previous"
-        tip = centre_x - size * 1.05 if back else centre_x + size * 1.05
-        base = centre_x + size * 0.2 if back else centre_x - size * 0.2
-        cr.move_to(base, centre_y - size)
-        cr.line_to(tip, centre_y)
-        cr.line_to(base, centre_y + size)
+        # A triangle pointing to one side with the bar that means "skip" beyond
+        # its tip. The two together run from -reach to +reach, so the pair stays
+        # centred whatever the bar's width turns out to be -- and reach is kept
+        # short enough that the triangle's outer corners fall inside the circle
+        # rather than poking out past its edge.
+        bar = size * 0.22
+        tip = size * 0.86
+        reach = tip + bar
+        sign = -1.0 if action == "previous" else 1.0
+        cr.move_to(centre_x - sign * reach, top)
+        cr.line_to(centre_x + sign * tip, centre_y)
+        cr.line_to(centre_x - sign * reach, bottom)
         cr.close_path()
         cr.fill()
-        bar = centre_x - size * 1.27 if back else centre_x + size * 1.05
-        cr.rectangle(bar, centre_y - size, size * 0.22, size * 2)
+        bar_left = centre_x + sign * tip if sign > 0 else centre_x - reach
+        cr.rectangle(bar_left, top, bar, size * 2)
         cr.fill()
 
     def _draw_status_light(self, cr, height: int) -> None:
