@@ -40,6 +40,7 @@ HALO_DIRECTIONS = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1),
 CURSORS = {
     "n": "ns-resize", "s": "ns-resize", "e": "ew-resize", "w": "ew-resize",
     "ne": "nesw-resize", "sw": "nesw-resize", "nw": "nwse-resize", "se": "nwse-resize",
+    "control": "pointer",
 }
 CURRENT, TRANSLATION, LYRICS = "current", "translation", "lyrics"
 FONT_WEIGHTS = {
@@ -54,6 +55,15 @@ FONT_WEIGHTS = {
 }
 DRAG_THRESHOLD = 3
 RESIZE_ZONE = 9
+# The playback controls that appear while the pointer is over the panel. The hit
+# area is deliberately much bigger than the circle drawn: they appear only once
+# something is already being aimed at, and a small target is the last thing
+# wanted then. Three of them, 60 px across, fit the smallest panel there is.
+CONTROL_RADIUS = 15.0
+CONTROL_HIT = 30.0
+CONTROL_GAP = 74.0               # between the centres of neighbouring buttons
+CONTROL_BOTTOM = 36.0            # centre height above the panel's bottom edge
+CONTROLS = ("previous", "playpause", "next")
 ANIMATION_FRAME_MS = 16
 INVISIBLE = 0.02
 HALO_FADE_FLOOR = 0.55
@@ -177,6 +187,8 @@ class Overlay:
         self._size: tuple[int, int] | None = None
         self._drag: tuple | None = None
         self._dragged = False
+        self._pointer_inside = False
+        self._hovered_control: str | None = None
         self._resize: tuple | None = None
         self._cursor_name: str | None = None
         self._cursors: dict[str, Gdk.Cursor] = {}
@@ -232,12 +244,14 @@ class Overlay:
             Gdk.EventMask.BUTTON_PRESS_MASK
             | Gdk.EventMask.BUTTON_RELEASE_MASK
             | Gdk.EventMask.POINTER_MOTION_MASK
+            | Gdk.EventMask.ENTER_NOTIFY_MASK
             | Gdk.EventMask.LEAVE_NOTIFY_MASK
         )
         area.connect("draw", self._on_draw)
         area.connect("button-press-event", self._on_button_press)
         area.connect("button-release-event", self._on_button_release)
         area.connect("motion-notify-event", self._on_motion)
+        area.connect("enter-notify-event", self._on_enter)
         area.connect("leave-notify-event", self._on_leave)
         window.add(area)
 
@@ -658,8 +672,21 @@ class Overlay:
         if cursor is not None:
             gdk_window.set_cursor(cursor)
 
+    def _on_enter(self, *_args) -> bool:
+        """The pointer is over the panel, so offer the playback controls."""
+        if not self._pointer_inside:
+            self._pointer_inside = True
+            if self._can_control():
+                self.area.queue_draw()
+        return False
+
     def _on_leave(self, *_args) -> bool:
+        """The pointer has gone, so take the controls away with it."""
         self._set_cursor(None)
+        if self._pointer_inside:
+            self._pointer_inside = False
+            self._hovered_control = None
+            self.area.queue_draw()
         return False
 
     def _on_button_press(self, _widget, event) -> bool:
@@ -671,6 +698,14 @@ class Overlay:
             return True
         if event.button != 1:
             return False
+
+        # A control takes the click before the window does: pressing one is a
+        # request to the player, not the start of a drag. Everywhere else inside
+        # the panel still drags it.
+        action = self._control_at(event.x, event.y)
+        if action is not None:
+            self.app.control(action)
+            return True
 
         edge = self._hit_test(event.x, event.y)
         x, y = self.window.get_position()
@@ -687,7 +722,16 @@ class Overlay:
             # any gesture left over from a missed release must be dropped
             self._resize = None
             self._drag = None
-            self._set_cursor(self._hit_test(event.x, event.y))
+            if not self._pointer_inside:
+                # motion inside the panel means the pointer is over it, whether
+                # or not the enter event was seen
+                self._pointer_inside = True
+                self.area.queue_draw()
+            hovered = self._control_at(event.x, event.y)
+            if hovered != self._hovered_control:
+                self._hovered_control = hovered
+                self.area.queue_draw()
+            self._set_cursor("control" if hovered else self._hit_test(event.x, event.y))
             return False
 
         if self._resize is not None:
@@ -1215,9 +1259,81 @@ class Overlay:
 
         self._fade_edges(cr, width, height, settings.edge_fade)
         self._draw_status_light(cr, height)
+        self._draw_controls(cr, width, height)
         cr.restore()
         cr.restore()
         return True
+
+    def _can_control(self) -> bool:
+        """Whether the player being followed takes play/pause and skip."""
+        check = getattr(self.app, "can_control", None)
+        return bool(check()) if callable(check) else False
+
+    def _control_centres(self) -> list[tuple[str, float, float]]:
+        width, height = self._panel
+        y = height - CONTROL_BOTTOM
+        middle = width / 2.0
+        return [
+            (action, middle + (index - 1) * CONTROL_GAP, y)
+            for index, action in enumerate(CONTROLS)
+        ]
+
+    def _control_at(self, x: float, y: float) -> str | None:
+        """Which control a point is over, if any.
+
+        The hit area is a good deal larger than the circle drawn, so a click
+        lands without having to be aimed at it -- which matters on a panel that
+        is mostly something to be read rather than clicked.
+        """
+        if not self._can_control():
+            return None
+        for action, centre_x, centre_y in self._control_centres():
+            if (x - centre_x) ** 2 + (y - centre_y) ** 2 <= CONTROL_HIT ** 2:
+                return action
+        return None
+
+    def _draw_controls(self, cr, width: int, height: int) -> None:
+        """The three playback buttons, while the pointer is over the panel."""
+        if not self._pointer_inside or not self._can_control():
+            return
+        colour = self._color(CURRENT)
+        for action, centre_x, centre_y in self._control_centres():
+            hovered = action == self._hovered_control
+            # A disc of the text's own colour. On a dark background both are pale
+            # and the glyph reads as the brighter of the two; on a light one both
+            # are dark and it reads as the darker. One colour serves both.
+            cr.set_source_rgba(*_tint(colour, 0.30 if hovered else 0.14))
+            cr.arc(centre_x, centre_y, CONTROL_RADIUS, 0.0, 2 * math.pi)
+            cr.fill()
+            cr.set_source_rgba(*_tint(colour, 1.0))
+            self._draw_control_glyph(cr, action, centre_x, centre_y)
+
+    def _draw_control_glyph(self, cr, action: str, centre_x: float, centre_y: float) -> None:
+        size = CONTROL_RADIUS * 0.58
+        if action == "playpause":
+            if self._clock_playing:
+                for offset in (-size * 0.46, size * 0.18):     # two bars
+                    cr.rectangle(centre_x + offset, centre_y - size, size * 0.28, size * 2)
+                cr.fill()
+            else:
+                cr.move_to(centre_x - size * 0.55, centre_y - size)
+                cr.line_to(centre_x + size * 0.85, centre_y)
+                cr.line_to(centre_x - size * 0.55, centre_y + size)
+                cr.close_path()
+                cr.fill()
+            return
+
+        back = action == "previous"
+        tip = centre_x - size * 1.05 if back else centre_x + size * 1.05
+        base = centre_x + size * 0.2 if back else centre_x - size * 0.2
+        cr.move_to(base, centre_y - size)
+        cr.line_to(tip, centre_y)
+        cr.line_to(base, centre_y + size)
+        cr.close_path()
+        cr.fill()
+        bar = centre_x - size * 1.27 if back else centre_x + size * 1.05
+        cr.rectangle(bar, centre_y - size, size * 0.22, size * 2)
+        cr.fill()
 
     def _draw_status_light(self, cr, height: int) -> None:
         """The corner light: red while a lookup is out, green once it is answered.

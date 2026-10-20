@@ -240,6 +240,20 @@ class App:
         if self.track is not None:
             self._start_lookup(self.track)
 
+    # -- playback control ------------------------------------------------
+
+    def can_control(self) -> bool:
+        """Whether the player being followed takes play/pause and skip."""
+        return self.players.can_control()
+
+    def control(self, action: str) -> None:
+        """Play/pause, previous or next, through whichever player is followed.
+
+        Nothing is done here afterwards: the player reports the new state over
+        D-Bus, and that arrives as a signal rather than waiting for a poll.
+        """
+        self.players.control(action)
+
     def adjust_font(self, direction: int) -> None:
         """Move both font sizes one step up (+1) or down (-1).
 

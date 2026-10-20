@@ -15,6 +15,13 @@ PLAYER_IFACE = "org.mpris.MediaPlayer2.Player"
 APP_IFACE = "org.mpris.MediaPlayer2"
 PROPS_IFACE = "org.freedesktop.DBus.Properties"
 CALL_TIMEOUT_MS = 1000
+# what the overlay's controls ask for, by the name the MPRIS Player interface
+# gives each call
+CONTROL_METHODS = {
+    "playpause": "PlayPause",
+    "previous": "Previous",
+    "next": "Next",
+}
 
 # shared by every playback source, so the app can treat them interchangeably
 TrackSignals = {
@@ -185,6 +192,30 @@ class MprisClient(GObject.Object):
             return float(self.get_property("Rate"))
         except GLib.Error:
             return 1.0
+
+    def can_control(self) -> bool:
+        """Whether the player says it takes play/pause and skip at all."""
+        value = self.proxy.get_cached_property("CanControl") if self.proxy else None
+        return bool(value.unpack()) if value is not None else False
+
+    def control(self, action: str) -> bool:
+        """Ask the player to play, pause or skip; False where it will not.
+
+        Called on the main thread from a click. Each of these is a local D-Bus
+        call to a process that is already running, so it costs less than the
+        redraw that follows it.
+        """
+        method = CONTROL_METHODS.get(action)
+        if self.proxy is None or method is None:
+            return False
+        try:
+            self.proxy.call_sync(
+                method, None, Gio.DBusCallFlags.NONE, CALL_TIMEOUT_MS, None
+            )
+        except GLib.Error as exc:
+            print(f"PlanaLyrics: {self.label} 拒绝 {method} ({exc.message})")
+            return False
+        return True
 
     def player_pid(self) -> int | None:
         """PID of the player process, for resolving its open audio files."""

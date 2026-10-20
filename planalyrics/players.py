@@ -170,6 +170,20 @@ class PlayerHub(GObject.Object):
     def connected(self) -> bool:
         return self.active is not None and getattr(self.active, "connected", False)
 
+    def can_control(self) -> bool:
+        """Whether the player being followed takes play/pause and skip.
+
+        Asked before the overlay draws its controls at all. LX Music's open API
+        reports what is playing but offers no call to change it, and buttons that
+        do nothing are worse than no buttons.
+        """
+        check = getattr(self.active, "can_control", None)
+        return bool(check()) if callable(check) else False
+
+    def control(self, action: str) -> bool:
+        act = getattr(self.active, "control", None)
+        return bool(act(action)) if callable(act) else False
+
     @property
     def track(self) -> Track:
         return self.active.track if self.active is not None else Track()
