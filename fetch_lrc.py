@@ -11,11 +11,18 @@ and the first source holding word timing for it supplies the whole file.
 What is written, beside the audio and named after it:
 
     [00:02.000]first line
+    [00:02.000]first line, translated
     [00:05.500]second line
+    [00:05.500]second line, translated
     [awlrc:lrc:<base64>,tlrc:<base64>,awlrc:<base64>]
 
-The last line is the AMLL/Lyricify bundle: the same lyric, its translation, and
-the per-character timing. Players that do not understand it ignore it.
+Each line is followed by its Chinese translation on the same timestamp, so any
+player shows both; the last line is the AMLL/Lyricify bundle with the same lyric,
+its translation and the per-character timing, for players that understand it.
+
+A lyric that comes back incomplete is discarded rather than written: it must
+carry word timing, and a song that is not Chinese must carry a Chinese line. What
+was skipped and why is listed at the end.
 
 Sources are tried in this order: QQ Music, Kugou, NetEase. The first with an
 exact match and word timing wins.
@@ -28,6 +35,7 @@ import base64
 import re
 import sys
 import unicodedata
+from difflib import SequenceMatcher
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -35,7 +43,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mutagen  # noqa: E402
 
 from planalyrics import kugou, lyrics as lrc, net, qq  # noqa: E402
-from planalyrics import sources as lyric_sources  # noqa: E402
 from planalyrics.mpris import Track  # noqa: E402
 
 AUDIO_SUFFIXES = (
@@ -198,8 +205,9 @@ def add_translation(lyrics, track: Track, title: str, artist: str) -> None:
     """Fill in the Chinese translation, which only NetEase pairs with its words.
 
     Asked even when another site supplied the timing, under the same exact-match
-    rule. The lines are matched by their times rather than their order, because
-    the two sites cut a song differently.
+    rule. The translation is lined up against the lyric by text rather than by
+    time, because the two sites cut the song differently and their clocks rarely
+    agree.
     """
     if any(line.translation for line in lyrics.lines):
         return
@@ -220,8 +228,55 @@ def add_translation(lyrics, track: Track, title: str, artist: str) -> None:
         if not translation.strip():
             continue
         paired = lrc.parse_with_translation(original, translation, "")
-        lyric_sources._map_translations(lyrics, paired.lines)
+        _map_translations_by_text(lyrics, paired.lines)
         return
+
+
+def _map_translations_by_text(lyrics, source_lines) -> None:
+    """Put NetEase's per-line translation onto our lines by lining the texts up.
+
+    The translation arrives paired with NetEase's own original, while our lyric
+    came from QQ or Kugou, so the two cut the song differently and their clocks
+    rarely agree. Matching by timestamp reaches only the lines that happen to
+    land within a few hundred milliseconds of each other; lining the two
+    originals up character by character survives both the different cut and the
+    different clock. A line that lines up with nothing -- a credit line one
+    source carries but the other does not -- is left untranslated.
+    """
+    our_chars: list[str] = []
+    our_line: list[int] = []
+    for index, line in enumerate(lyrics.lines):
+        for char in line.text:
+            our_chars.append(char)
+            our_line.append(index)
+
+    their_chars: list[str] = []
+    their_line: list[int] = []
+    for index, line in enumerate(source_lines):
+        for char in line.text:
+            their_chars.append(char)
+            their_line.append(index)
+
+    if not our_chars or not their_chars:
+        return
+
+    matcher = SequenceMatcher(None, our_chars, their_chars, autojunk=False)
+    aligned: dict[int, dict[int, int]] = {}
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            continue
+        for step in range(i2 - i1):
+            ours = our_line[i1 + step]
+            theirs = their_line[j1 + step]
+            aligned.setdefault(ours, {})
+            aligned[ours][theirs] = aligned[ours].get(theirs, 0) + 1
+
+    for ours, counts in aligned.items():
+        theirs = max(counts, key=counts.get)
+        line = lyrics.lines[ours]
+        translation = source_lines[theirs].translation
+        if translation and counts[theirs] * 2 >= len(line.text):
+            line.translation = translation
 
 
 # -- serialising ------------------------------------------------------
@@ -241,14 +296,29 @@ def units_of(line) -> list[tuple[int, int, str]] | None:
     return None
 
 
+def _missing(lyrics) -> str | None:
+    """Why this lyric is not worth writing, or None when it is complete.
+
+    A file without word timing, or a foreign song left with no Chinese line, is
+    worse than no file at all, so it is discarded rather than written.
+    """
+    if not any(units_of(line) for line in lyrics.lines):
+        return "没有逐字时间轴"
+    if lyrics.script != "zh" and not any(line.translation for line in lyrics.lines):
+        return "没有中文译文"
+    return None
+
+
 def build_document(lyrics) -> str:
-    plain, translated, timed = [], [], []
+    plain, translated, timed, visible = [], [], [], []
     for line in lyrics.lines:
         if line.t_ms < 0 or not line.text.strip():
             continue
         plain.append(f"{stamp(line.t_ms)}{line.text}")
+        visible.append(f"{stamp(line.t_ms)}{line.text}")
         if line.translation:
             translated.append(f"{stamp(line.t_ms)}{line.translation}")
+            visible.append(f"{stamp(line.t_ms)}{line.translation}")
         units = units_of(line)
         if units:
             body = "".join(
@@ -262,7 +332,7 @@ def build_document(lyrics) -> str:
     if timed:
         fields.append(f"awlrc:{base64.b64encode(chr(10).join(timed).encode()).decode()}")
 
-    return "\n".join(plain) + f"\n[awlrc:{','.join(fields)}]\n"
+    return "\n".join(visible) + f"\n[awlrc:{','.join(fields)}]\n"
 
 
 def write(path: Path, lyrics) -> tuple[bool, str]:
@@ -326,6 +396,11 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         add_translation(lyrics, track, title, artist)
+        reason = _missing(lyrics)
+        if reason:
+            print(f"{head}\n    舍弃：{reason}")
+            failed.append((audio.name, reason))
+            continue
         try:
             with_word, _doc = write(target, lyrics)
         except OSError as exc:
